@@ -1,4 +1,4 @@
-package tests
+package
 {
 	import backstage2d.display.Image;
 	import backstage2d.display.Layer;
