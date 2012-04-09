@@ -30,17 +30,8 @@ package backstage2d.render.stage3d
 			// :TODO: enforce a power of two size (round it up);
 		}
 		
-		/*override public function make( actors:Vector.<Actor> ):BitmapData
-		{
-			return super.make( actors );
-		}*/
-		
 		public function upload( context3D:Context3D ):void
         {
-			if ( ! ss ) {
-				trace( "nothing to upload...call make first");
-			}
-			
 			if ( texture == null ) {
 				texture = context3D.createTexture(
 					ss.width, ss.height, Context3DTextureFormat.BGRA, false

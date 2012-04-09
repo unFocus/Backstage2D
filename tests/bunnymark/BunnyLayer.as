@@ -41,7 +41,9 @@ package bunnymark
 	{
 		[Embed(source="../../assets/wabbit_alpha.png")]
 		private var BunnyImage : Class;
-		private var bunnyBMD:BitmapData;
+		// make the bunny bitmapData, and store a reference
+		private var bunnyBMD:BitmapData = (new BunnyImage() as Bitmap).bitmapData;
+		
 		private var _bunnies : Vector.<BunnySprite>;
 		
 		private var layer:Layer;
@@ -56,7 +58,6 @@ package bunnymark
 		{
 			setPosition(view);
 			_bunnies = new Vector.<BunnySprite>();
-			
 		}
 		public function setPosition(view:Rectangle):void {
 			maxX = view.width;
@@ -67,9 +68,6 @@ package bunnymark
 		
 		public function createRenderLayer() : Layer
 		{
-			// make the bunny bitmapData, and store a reference
-			bunnyBMD = (new BunnyImage() as Bitmap).bitmapData
-			
 			// Create new render layer 
 			layer = new Layer();
 			

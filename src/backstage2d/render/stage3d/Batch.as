@@ -41,11 +41,12 @@ package backstage2d.render.stage3d
 		
 		internal var context:Context;
 		
-		public var numQuads:int;
+		public var numQuads:int// = 0;
 		
 		public function Batch( layer:Layer ):void
 		{
 			this.layer = layer;
+			atlas = new TextureAtlas(256, 256);
 		}
 		
 		protected function dispose():void {
@@ -53,45 +54,49 @@ package backstage2d.render.stage3d
 			//System.gc();
 		}
 		
+		public function add( actor:Actor ):void
+		{
+			var childVertexFirstIndex:uint;
+			var rect:Rectangle;
+			
+			atlas.add( actor );
+			
+			childVertexFirstIndex = (numQuads * 12) / 3;
+			vertexData.push(
+				0, 0, 1,
+				0, 0, 1,
+				0, 0, 1,
+				0, 0, 1
+			);
+			
+			indexData.push(
+				childVertexFirstIndex, childVertexFirstIndex + 1, childVertexFirstIndex + 2,
+				childVertexFirstIndex, childVertexFirstIndex + 2, childVertexFirstIndex + 3
+			);
+			
+			rect = (atlas.nodes[ actor.texID ] as SpriteNode).rect;
+			
+			uvData.push(
+				rect.x / atlas.ss.width, rect.y / atlas.ss.height + rect.height / atlas.ss.height,
+				rect.x / atlas.ss.width, rect.y / atlas.ss.height,
+				rect.x / atlas.ss.width + rect.width / atlas.ss.width, rect.y / atlas.ss.height,
+				rect.x / atlas.ss.width + rect.width / atlas.ss.width, rect.y / atlas.ss.height + rect.height / atlas.ss.height
+			);
+			
+			numQuads = numQuads + 1;
+		}
+		
 		/**
-		 * Spawns a worker thread to build the static components of the 
-		 * batch used in the render loop (Textures and Vertices, etc.)
+		 * Builds the Batch GPU assets.
 		 */
 		public function build():void
 		{
-			atlas = new TextureAtlas(512, 512);
-			atlas.make( layer.actors );
+			atlas.addMany( layer.actors );
 			
-			var i:uint = 0;
-			var childVertexFirstIndex:uint;
-			var rect:Rectangle;
-			for each ( var actor:Actor in layer.actors )
+			for ( var i:int = 0, n:int = layer.actors.length; i < n; ++i )
 			{
-				childVertexFirstIndex = (i * 12) / 3;
-				vertexData.push(
-					0, 0, 1,
-					0, 0, 1,
-					0, 0, 1,
-					0, 0, 1
-				);
-				
-				indexData.push(
-					childVertexFirstIndex, childVertexFirstIndex + 1, childVertexFirstIndex + 2,
-					childVertexFirstIndex, childVertexFirstIndex + 2, childVertexFirstIndex + 3
-				);
-				
-				rect = (atlas.nodes[ actor.texID ] as SpriteNode).rect;
-				
-				uvData.push(
-					rect.x / atlas.ss.width, rect.y / atlas.ss.height + rect.height / atlas.ss.height,
-					rect.x / atlas.ss.width, rect.y / atlas.ss.height,
-					rect.x / atlas.ss.width + rect.width / atlas.ss.width, rect.y / atlas.ss.height,
-					rect.x / atlas.ss.width + rect.width / atlas.ss.width, rect.y / atlas.ss.height + rect.height / atlas.ss.height
-				);
-				
-				i = i + 1;
+				add( layer.actors[ i ] );
 			}
-			numQuads = i;
 			
 			_updateVBOs = true;
 		}
@@ -135,6 +140,12 @@ package backstage2d.render.stage3d
 		
 		public function draw():void
 		{
+			// check if new items were added to the layer
+			if ( layer.actors.length > numQuads ) {
+				build(); // this re-adds already added actors
+				atlas.upload( context.context3D );
+			}
+			
 			// Update vertex data with current position of children
 			var i:uint;
 			for each ( var actor:Actor in layer.actors ) {
