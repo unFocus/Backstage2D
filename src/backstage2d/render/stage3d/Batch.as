@@ -129,13 +129,13 @@ package backstage2d.render.stage3d
 				)
 			);
 			
-			if (atlas.complete)
+			//if (atlas.complete)
 				atlas.upload( context3D );
-			else
+			/*else
 				atlas.made.add( function atlasMade():void {
 					atlas.made.remove( atlasMade );
 					atlas.upload( context3D );
-				} );
+				} );*/
 		}
 		
 		public function draw():void

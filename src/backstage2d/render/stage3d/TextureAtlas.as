@@ -22,7 +22,10 @@ package backstage2d.render.stage3d
 	{
 		internal var texture:Texture;
 		
-		public const made:SignalLite = new SignalLite();
+		//public const made:SignalLite = new SignalLite();
+		
+		// :HACK: This really needs to be more robust, but this gets us done for the moment.
+		private var lastUploadedNodeCount:int// = 0;
 		
 		public function TextureAtlas( width:int, height:int )
 		{
@@ -37,6 +40,11 @@ package backstage2d.render.stage3d
 					ss.width, ss.height, Context3DTextureFormat.BGRA, false
 				);
 			}
+			
+			if ( nodes.length == lastUploadedNodeCount)
+				return;
+			else 
+				lastUploadedNodeCount = nodes.length;
 			
 			texture.uploadFromBitmapData( ss );
 			

@@ -21,8 +21,6 @@ package backstage2d.display.spritesheets
 		
 		protected var tree:SpriteNode = new SpriteNode();
 		
-		public var complete:Boolean = false;
-		
 		private var scratchBMD:BitmapData;
 		
 		/**
@@ -127,7 +125,6 @@ package backstage2d.display.spritesheets
 				add( actors[i] );
 			}
 			
-			complete = true;
 			scratchBMD.dispose();
 			scratchBMD = null;
 			
