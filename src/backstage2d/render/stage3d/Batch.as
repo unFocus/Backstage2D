@@ -74,7 +74,7 @@ package backstage2d.render.stage3d
 				childVertexFirstIndex, childVertexFirstIndex + 2, childVertexFirstIndex + 3
 			);
 			
-			rect = (atlas.nodes[ actor.texID ] as SpriteNode).rect;
+			rect = actor.texNode.rect;
 			
 			uvData.push(
 				rect.x / atlas.ss.width, rect.y / atlas.ss.height + rect.height / atlas.ss.height,

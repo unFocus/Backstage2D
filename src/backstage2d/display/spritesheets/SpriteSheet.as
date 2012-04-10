@@ -40,7 +40,7 @@ package backstage2d.display.spritesheets
 		 */
 		public function add( actor:Actor ):int
 		{
-			if ( actor.texID > -1 && nodes.length > actor.texID && nodes[ actor.texID ] == actor.texNode )
+			if ( actor.texNode )
 				return actor.texID; // already added.
 			
 			var bounds:Rectangle;
