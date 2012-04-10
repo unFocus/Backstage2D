@@ -23,6 +23,9 @@ package backstage2d.display.spritesheets
 		
 		private var scratchBMD:BitmapData;
 		
+		public var width:int// = 0;
+		public var height:int// = 0;
+		
 		/**
 		 * 
 		 * @param	width
@@ -30,6 +33,8 @@ package backstage2d.display.spritesheets
 		 */
 		public function SpriteSheet( width:int, height:int ):void
 		{
+			this.width = width;
+			this.height = height;
 			ss = new BitmapData( width, height, true, 0x00FFFFFF );
 			tree.rect = new Rectangle( 0, 0, width, height );
 		}

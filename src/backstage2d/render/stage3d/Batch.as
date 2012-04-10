@@ -77,10 +77,10 @@ package backstage2d.render.stage3d
 			rect = actor.texNode.rect;
 			
 			uvData.push(
-				rect.x / atlas.ss.width, rect.y / atlas.ss.height + rect.height / atlas.ss.height,
-				rect.x / atlas.ss.width, rect.y / atlas.ss.height,
-				rect.x / atlas.ss.width + rect.width / atlas.ss.width, rect.y / atlas.ss.height,
-				rect.x / atlas.ss.width + rect.width / atlas.ss.width, rect.y / atlas.ss.height + rect.height / atlas.ss.height
+				rect.x / atlas.width, rect.y / atlas.height + rect.height / atlas.height,
+				rect.x / atlas.width, rect.y / atlas.height,
+				rect.x / atlas.width + rect.width / atlas.width, rect.y / atlas.height,
+				rect.x / atlas.width + rect.width / atlas.width, rect.y / atlas.height + rect.height / atlas.height
 			);
 			
 			numQuads = numQuads + 1;
@@ -147,10 +147,8 @@ package backstage2d.render.stage3d
 			}
 			
 			// Update vertex data with current position of children
-			var i:uint;
-			for each ( var actor:Actor in layer.actors ) {
-				updateChildVertexData( actor, i );
-				i = i + 1;
+			for ( var i:uint, n:uint = layer.actors.length; i < n; i = i + 1) {
+				updateChildVertexData( layer.actors[ i ], i );
 			}
             
 			var _context3D:Context3D = context.context3D;
