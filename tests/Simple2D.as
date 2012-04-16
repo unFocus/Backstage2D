@@ -33,6 +33,17 @@ package
 		private static const PirateImage : Class;
 		private static const pirateBMD:BitmapData = new PirateImage().bitmapData;
 		
+		private static function makeOrthoProjection(w:Number, h:Number, n:Number, f:Number):Matrix3D
+		{
+			return new Matrix3D(Vector.<Number>
+			([
+				2/w, 0  ,       0,        0,
+				0  , 2/h,       0,        0,
+				0  , 0  , 1/(f-n), -n/(f-n),
+				0  , 0  ,       0,        1
+			]));
+		}
+		
 		private var stage3D:Stage3D;
 		private var context3D:Context3D;
 		
@@ -89,7 +100,7 @@ package
 			vertexBuffer = context3D.createVertexBuffer( 4, 3 );
 			uvBuffer = context3D.createVertexBuffer( 4, 2 );
 			
-			indexBuffer.uploadFromVector(new <uint>[0, 1, 2, 0, 2, 3], 0, 6);
+			indexBuffer.uploadFromVector(new <uint>[0, 1, 2, 1, 2, 3], 0, 6);
 			vertexBuffer.uploadFromVector(new <Number>[
 					-100, -100, 1, // x, y, alpha
 					-100, 100, 1,
@@ -101,18 +112,16 @@ package
 			uvBuffer.uploadFromVector( new <Number>[
 					0, 1,
 					0, 0,
-					1, 0,
-					1, 1
+					1, 1,
+					1, 0
 				], 0, 4
 			);
 			
 			// Set vertex buffer, this is what we access in vertex shader register va0
-			context3D.setVertexBufferAt(0, vertexBuffer, 0, FLOAT_3);
-			context3D.setVertexBufferAt(1, uvBuffer, 0, FLOAT_2);
+			context3D.setVertexBufferAt(0, vertexBuffer, 0, Context3DVertexBufferFormat.FLOAT_3);
+			context3D.setVertexBufferAt(1, uvBuffer, 0, Context3DVertexBufferFormat.FLOAT_2);
 			
-			viewMatrix = new Matrix3D();
-            viewMatrix.appendTranslation(-width/2, -height/2, 0);            
-            viewMatrix.appendScale(2.0/width, -2.0/height, 1);
+			viewMatrix = makeOrthoProjection(stage.stageWidth, stage.stageHeight, 0, 100);
 			
 			context3D.setBlendFactors(Context3DBlendFactor.ONE, Context3DBlendFactor.ONE_MINUS_SOURCE_ALPHA);
 			
@@ -131,7 +140,7 @@ package
 			context3D.clear(0, 0, 0, 0);
 			context3D.setProgram( program );
 			context3D.setBlendFactors(Context3DBlendFactor.ONE, Context3DBlendFactor.ONE_MINUS_SOURCE_ALPHA);
-			context3D.setProgramConstantsFromMatrix( Context3DProgramType.VERTEX, 0, viewMatrix, false );
+			context3D.setProgramConstantsFromMatrix( Context3DProgramType.VERTEX, 0, viewMatrix, true );
 			context3D.setTextureAt(0, texture );
 			context3D.setVertexBufferAt(0, vertexBuffer, 0, Context3DVertexBufferFormat.FLOAT_3);
 			context3D.setVertexBufferAt(1, uvBuffer, 0, Context3DVertexBufferFormat.FLOAT_2);
