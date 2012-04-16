@@ -77,10 +77,10 @@ package backstage2d.render.stage3d
 			rect = actor.texNode.rect;
 			
 			uvData.push(
-				rect.x / atlas.width, rect.y / atlas.height + rect.height / atlas.height,
 				rect.x / atlas.width, rect.y / atlas.height,
-				rect.x / atlas.width + rect.width / atlas.width, rect.y / atlas.height,
-				rect.x / atlas.width + rect.width / atlas.width, rect.y / atlas.height + rect.height / atlas.height
+				rect.x / atlas.width, rect.y / atlas.height + rect.height / atlas.height,
+				rect.x / atlas.width + rect.width / atlas.width, rect.y / atlas.height + rect.height / atlas.height,
+				rect.x / atlas.width + rect.width / atlas.width, rect.y / atlas.height
 			);
 			
 			numQuads = numQuads + 1;
