@@ -56,8 +56,8 @@ package bunnymark
 		public const RENDERMODE:String = Context3DRenderMode.AUTO;
 		public var context3D:Context3D;
 		private var bg:Background;
-		private var _width:Number = 480;
-		private var _height:Number = 640;
+		private var _width:Number = 640;
+		private var _height:Number = 960;
 		private var tf:TextField;	
 		
 		private var fps:FPS;
