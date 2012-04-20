@@ -50,14 +50,14 @@ package bunnymark
 	import flash.utils.getTimer;
 	import backstage2d.render.stage3d.AntiAliasQuality;
 	
-	[SWF(width="480", height="640", frameRate="60", backgroundColor="#ffffff")]
+	[SWF(width="640", height="960", frameRate="60", backgroundColor="#ffffff")]
 	public class BunnyMark_MoleHill extends Sprite
 	{
 		public const RENDERMODE:String = Context3DRenderMode.AUTO;
 		public var context3D:Context3D;
 		private var bg:Background;
-		private var _width:Number = 480;
-		private var _height:Number = 640;
+		private var _width:Number = 640;
+		private var _height:Number = 960;
 		private var tf:TextField;	
 		
 		private var fps:FPS;
@@ -79,6 +79,9 @@ package bunnymark
 			stage.align = StageAlign.TOP_LEFT;
 			stage.scaleMode = StageScaleMode.NO_SCALE;
 			stage.addEventListener(Event.RESIZE, onResizeEvent);
+			
+			_width = stage.stageWidth;
+			_height = stage.stageHeight;
 			
 			fps = new FPS();
 			addChild(fps);
@@ -141,6 +144,9 @@ package bunnymark
 			if(tf != null) {
 				tf.x = _width - 100;
 			}
+			
+			if (backstage.context.verify())
+				backstage.context.configure(_width, _height, 0);
 		}
 		
 		private function onEnterFrame(e:Event):void

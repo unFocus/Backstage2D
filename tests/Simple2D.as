@@ -102,18 +102,18 @@ package
 			
 			indexBuffer.uploadFromVector(new <uint>[0, 1, 2, 1, 2, 3], 0, 6);
 			vertexBuffer.uploadFromVector(new <Number>[
-					-100, -100, 1, // x, y, alpha
-					-100, 100, 1,
-					100, -100, 1,
-					100, 100, 1
+			/* tl */	0,   0,   1, // x, y, alpha
+			/* tr */	0,   256, 1,
+			/* bl */	256, 0,   1,
+			/* br */	256, 256, 1
 				], 0, 4
 			);
-			var rect:Rectangle = pirateBMD.rect;
+			
 			uvBuffer.uploadFromVector( new <Number>[
-					0, 1,
-					0, 0,
-					1, 1,
-					1, 0
+			/* tl */	0, 0,
+			/* tr */	0, 1,
+			/* bl */	1, 0,
+			/* br */	1, 1
 				], 0, 4
 			);
 			
@@ -121,7 +121,8 @@ package
 			context3D.setVertexBufferAt(0, vertexBuffer, 0, Context3DVertexBufferFormat.FLOAT_3);
 			context3D.setVertexBufferAt(1, uvBuffer, 0, Context3DVertexBufferFormat.FLOAT_2);
 			
-			viewMatrix = makeOrthoProjection(stage.stageWidth, stage.stageHeight, 0, 100);
+			viewMatrix = makeOrthoProjection(stage.stageWidth, -stage.stageHeight, 0, 100);
+			viewMatrix.prependTranslation(-(stage.stageWidth/2), -(stage.stageHeight/2), 0);
 			
 			context3D.setBlendFactors(Context3DBlendFactor.ONE, Context3DBlendFactor.ONE_MINUS_SOURCE_ALPHA);
 			
