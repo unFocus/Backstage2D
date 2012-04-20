@@ -24,8 +24,8 @@ package
 	import flash.display.StageAlign;
 	
 	/**
-	 * ...
-	 * @author ...
+	 * A Simple2D example for playing around with AGAL and whatnot.
+	 * @author Kevin Newman
 	 */
 	public class Simple2D extends Sprite 
 	{
