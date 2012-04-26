@@ -33,17 +33,6 @@ package
 		private static const PirateImage : Class;
 		private static const pirateBMD:BitmapData = new PirateImage().bitmapData;
 		
-		private static function makeOrthoProjection(w:Number, h:Number, n:Number, f:Number):Matrix3D
-		{
-			return new Matrix3D(Vector.<Number>
-			([
-				2/w, 0  ,       0,        0,
-				0  , 2/h,       0,        0,
-				0  , 0  , 1/(f-n), -n/(f-n),
-				0  , 0  ,       0,        1
-			]));
-		}
-		
 		private var stage3D:Stage3D;
 		private var context3D:Context3D;
 		
@@ -121,8 +110,9 @@ package
 			context3D.setVertexBufferAt(0, vertexBuffer, 0, Context3DVertexBufferFormat.FLOAT_3);
 			context3D.setVertexBufferAt(1, uvBuffer, 0, Context3DVertexBufferFormat.FLOAT_2);
 			
-			viewMatrix = makeOrthoProjection(stage.stageWidth, -stage.stageHeight, 0, 100);
-			viewMatrix.prependTranslation(-(stage.stageWidth/2), -(stage.stageHeight/2), 0);
+			viewMatrix = new Matrix3D();
+			viewMatrix.appendTranslation(-stage.stageWidth>>1, -stage.stageHeight>>1, 0);            
+			viewMatrix.appendScale(2.0 / stage.stageWidth, -2.0 / stage.stageHeight, 1);
 			
 			context3D.setBlendFactors(Context3DBlendFactor.ONE, Context3DBlendFactor.ONE_MINUS_SOURCE_ALPHA);
 			
