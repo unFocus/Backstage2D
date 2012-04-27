@@ -38,6 +38,7 @@ package bunnymark
 	import flash.geom.Matrix3D;
 	import flash.utils.getTimer;
 	import flash.geom.Rectangle;
+	import flash.geom.Matrix;
 	
 	public class Background
 	{
@@ -76,6 +77,24 @@ package bunnymark
 			texBM = new Grass();
 			tex = context3D.createTexture(texBM.width, texBM.height, Context3DTextureFormat.BGRA,false);
 			tex.uploadFromBitmapData(texBM.bitmapData,0);
+			
+			
+			// Courtesy of Starling: let's generate mipmaps
+            var currentWidth:int = texBM.width >> 1;
+            var currentHeight:int = texBM.height >> 1;
+            var level:int = 1;
+            var canvas:BitmapData = new BitmapData(currentWidth, currentHeight, true, 0);
+            var transform:Matrix = new Matrix(.5, 0, 0, .5);
+            
+            while ( currentWidth >= 1 || currentHeight >= 1 ) {
+                canvas.fillRect(new Rectangle(0, 0, Math.max(currentWidth,1), Math.max(currentHeight,1)), 0);
+                canvas.draw(texBM, transform, null, null, null, true);
+                tex.uploadFromBitmapData(canvas, level++);
+                transform.scale(0.5, 0.5);
+                currentWidth = currentWidth >> 1;
+                currentHeight = currentHeight >> 1;
+            }
+			
 			
 			//create vertices
 			buildMesh();
