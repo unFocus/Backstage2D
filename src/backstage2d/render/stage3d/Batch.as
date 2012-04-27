@@ -63,7 +63,7 @@ package backstage2d.render.stage3d
 			
 			childVertexFirstIndex = (numQuads * 12) / 3;
 			vertexData.push(
-				0, 0, 1,
+				0, 0, 1, // x, y, alpha
 				0, 0, 1,
 				0, 0, 1,
 				0, 0, 1
@@ -77,10 +77,10 @@ package backstage2d.render.stage3d
 			rect = actor.texNode.rect;
 			
 			uvData.push(
-				rect.x / atlas.width, rect.y / atlas.height,
-				rect.x / atlas.width, rect.y / atlas.height + rect.height / atlas.height,
-				rect.x / atlas.width + rect.width / atlas.width, rect.y / atlas.height + rect.height / atlas.height,
-				rect.x / atlas.width + rect.width / atlas.width, rect.y / atlas.height
+			/* rt */	rect.right / atlas.width,	rect.top / atlas.height, // x, y
+			/* rb */	rect.right / atlas.width,	rect.bottom / atlas.height,
+			/* lb */	rect.left / atlas.width,	rect.bottom / atlas.height,
+			/* lt */	rect.left / atlas.width,	rect.top / atlas.height
 			);
 			
 			numQuads = numQuads + 1;
