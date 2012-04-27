@@ -3,9 +3,14 @@ package backstage2d.display.classic
 	import flash.display.BitmapData;
 	import flash.display.IBitmapDrawable;
 	import flash.display.Sprite;
+	import flash.display.StageQuality;
 	import flash.geom.Matrix;
 	import flash.geom.Point;
 	import backstage2d.display.Actor;
+	import backstage2d.display.spritesheets.*;
+	
+	import backstage2d.namespaces.bs2d;
+	use namespace bs2d;
 	
 	/**
 	 * An actor for rendering a standard Sprite.
@@ -14,6 +19,8 @@ package backstage2d.display.classic
 	public class BSSprite extends Actor 
 	{
 		protected var sprite:Sprite;
+		
+		public var quality:String = StageQuality.BEST;
 		
 		public function BSSprite( sprite:Sprite ) 
 		{
@@ -26,6 +33,13 @@ package backstage2d.display.classic
 				-sprite.transform.pixelBounds.x,
 				-sprite.transform.pixelBounds.y
 			);
+		}
+		
+		override bs2d function set texNode( node:SpriteNode ):void {
+			SpriteRegistry.instance[ sprite ] = node;
+		}
+		override bs2d function get texNode():SpriteNode {
+			return SpriteRegistry.instance[ sprite ];
 		}
 		
 		/**
