@@ -37,11 +37,13 @@ package
 		private var context3D:Context3D;
 		
 		private var indexBuffer:IndexBuffer3D;
+		private var vbData:Vector.<Number>;
 		private var vertexBuffer:VertexBuffer3D;
 		private var uvBuffer:VertexBuffer3D;
 		private var texture:Texture;
 		private var program:Program3D;
 		private var viewMatrix:Matrix3D;
+		private var simpleSprite:Rectangle;
 		
 		public function Simple2D() 
 		{
@@ -85,24 +87,26 @@ package
 			);
 			texture.uploadFromBitmapData( pirateBMD );
 			
+			simpleSprite = new Rectangle( 0, 0, pirateBMD.width, pirateBMD.height );
+			
 			indexBuffer = context3D.createIndexBuffer( 6 );
 			vertexBuffer = context3D.createVertexBuffer( 4, 3 );
 			uvBuffer = context3D.createVertexBuffer( 4, 2 );
 			
 			indexBuffer.uploadFromVector(new <uint>[0, 1, 2, 1, 2, 3], 0, 6);
-			vertexBuffer.uploadFromVector(new <Number>[
-			/* tl */	0,   0,   1, // x, y, alpha
-			/* tr */	0,   256, 1,
-			/* bl */	256, 0,   1,
-			/* br */	256, 256, 1
-				], 0, 4
-			);
+			vbData = new <Number>[
+			/* lt */	simpleSprite.left,	simpleSprite.top,		1, // x, y, alpha
+			/* rt */	simpleSprite.right,	simpleSprite.top,		1,
+			/* lb */	simpleSprite.left,	simpleSprite.bottom,	1,
+			/* rb */	simpleSprite.right,	simpleSprite.bottom,	1
+			];
+			vertexBuffer.uploadFromVector( vbData, 0, 4 );
 			
 			uvBuffer.uploadFromVector( new <Number>[
-			/* tl */	0, 0,
-			/* tr */	0, 1,
-			/* bl */	1, 0,
-			/* br */	1, 1
+			/* lt */	0, 0, // x, y
+			/* rt */	1, 0,
+			/* lb */	0, 1,
+			/* rb */	1, 1
 				], 0, 4
 			);
 			
