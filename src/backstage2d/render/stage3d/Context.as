@@ -67,9 +67,9 @@ package backstage2d.render.stage3d
 		{
 			context3D.configureBackBuffer( width, height, quality, false );
 			
-            viewMatrix = new Matrix3D();
-            viewMatrix.appendTranslation(-width/2, -height/2, 0);            
-            viewMatrix.appendScale(2.0/width, -2.0/height, 1);
+			viewMatrix = new Matrix3D();
+			viewMatrix.appendTranslation(-width/2, -height/2, 0);
+			viewMatrix.appendScale(2.0/width, -2.0/height, 1);
 		}
 		
 		public function verify():Boolean
