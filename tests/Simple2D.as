@@ -138,13 +138,14 @@ package
 		
 		private function onRenderFrame(event:Event):void 
 		{
+			if (!context3D) return;
 			context3D.clear(0, 0, 0, 0);
-			context3D.setProgram( program );
-			context3D.setBlendFactors(Context3DBlendFactor.ONE, Context3DBlendFactor.ONE_MINUS_SOURCE_ALPHA);
-			context3D.setProgramConstantsFromMatrix( Context3DProgramType.VERTEX, 0, viewMatrix, true );
-			context3D.setTextureAt(0, texture );
-			context3D.setVertexBufferAt(0, vertexBuffer, 0, Context3DVertexBufferFormat.FLOAT_3);
-			context3D.setVertexBufferAt(1, uvBuffer, 0, Context3DVertexBufferFormat.FLOAT_2);
+			//context3D.setProgram( program );
+			//context3D.setBlendFactors(Context3DBlendFactor.ONE, Context3DBlendFactor.ONE_MINUS_SOURCE_ALPHA);
+			//context3D.setProgramConstantsFromMatrix( Context3DProgramType.VERTEX, 0, viewMatrix, true );
+			//context3D.setTextureAt(0, texture );
+			//context3D.setVertexBufferAt(0, vertexBuffer, 0, Context3DVertexBufferFormat.FLOAT_3);
+			//context3D.setVertexBufferAt(1, uvBuffer, 0, Context3DVertexBufferFormat.FLOAT_2);
 			context3D.drawTriangles(indexBuffer, 0, 2);
 			context3D.present();
 		}
