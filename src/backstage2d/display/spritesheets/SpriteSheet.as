@@ -1,12 +1,12 @@
 package backstage2d.display.spritesheets
 {
-    import flash.display.BitmapData;
+	import flash.display.BitmapData;
 	import flash.system.System;
 	import flash.utils.Dictionary;
 	
-    import flash.geom.Point;
-    import flash.geom.Rectangle;
-    import flash.geom.Matrix;
+	import flash.geom.Point;
+	import flash.geom.Rectangle;
+	import flash.geom.Matrix;
 	
 	import backstage2d.display.Actor;
 	
@@ -64,17 +64,14 @@ package backstage2d.display.spritesheets
 			
 			// This doesn't take into account filters, and other oddities.
 			// It's really to just roughly get it the DO in the middleish.
-			m.tx = ss.width/2 - (actor.width / 2);
-			m.ty = ss.height/2 - (actor.height / 2);
+			m.tx = scratchBMD.width/2 - (actor.width / 2);
+			m.ty = scratchBMD.height/2 - (actor.height / 2);
 			
 			// :TODO: Make it so we can adjust quality per Actor.
 			//stage.quality = "16X16LINEAR";
 			actor.draw( scratchBMD, m );
 			
 			bounds = scratchBMD.getColorBoundsRect(0xFFFFFFFF, 0x000000, false);
-			
-			// find new center point and offset
-			
 			
 			if ( actor.texNode )
 				leaf = actor.texNode;
@@ -87,6 +84,12 @@ package backstage2d.display.spritesheets
 				trace( 'image wouldn\'t fit :TODO: throw an error');
 			}
 			else {
+				// find new registration offset
+				// gets the left top offset.
+				leaf.regOffset.x = m.tx - bounds.x;
+				leaf.regOffset.y = m.ty - bounds.y;
+				// the registration offset percentage is taken care of in the batch
+				
 				actor.texID = nodes.length;
 				nodes.push( leaf );
 				
@@ -137,7 +140,7 @@ package backstage2d.display.spritesheets
 			//System.gc();
 			return ss;
 		}
-        
+		
 		private function sortByBigPerimeter( a:Actor, b:Actor ):int
 		{
 			var asize:int = a.width + a.height;
@@ -154,5 +157,5 @@ package backstage2d.display.spritesheets
 			}
 		}
 		
-    }
+	}
 }

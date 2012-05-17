@@ -46,7 +46,7 @@ package backstage2d.render.stage3d
 		public function Batch( layer:Layer ):void
 		{
 			this.layer = layer;
-			atlas = new TextureAtlas(256, 256);
+			atlas = new TextureAtlas(512, 512);
 		}
 		
 		protected function dispose():void {
@@ -189,8 +189,18 @@ package backstage2d.render.stage3d
                 
                 var scaledWidth:Number = sprite.widthWithScale;
                 var scaledHeight:Number = sprite.heightWithScale;
-                var centerX:Number = sprite.registration.x * sprite.scaleX;
-                var centerY:Number = sprite.registration.y * sprite.scaleY;
+				
+				// adjust the registration point for the texture offset and scale
+				// :TODO: simplify or cache when registration.xy change somehow.
+				// :TODO: invistigate small overlap in test case.
+				// :NOTE: There may be an issue with right / bottom calculations.
+				var regOffsetX:Number = ((sprite.registration.x / sprite.width) - .5) * -2;
+				var regOffsetY:Number = ((sprite.registration.y / sprite.height) - .5) * -2;
+				regOffsetX = sprite.texNode.regOffset.x * regOffsetX;
+				regOffsetY = sprite.texNode.regOffset.y * regOffsetY;
+				
+                var centerX:Number = (sprite.registration.x + regOffsetX) * sprite.scaleX;
+                var centerY:Number = (sprite.registration.y + regOffsetY) * sprite.scaleY;
                 
                 vertexData[childVertexIdx] = x - (cosT * centerX) - (sinT * (scaledHeight - centerY));
                 vertexData[childVertexIdx+1] = y - (sinT * centerX) + (cosT * (scaledHeight - centerY));
