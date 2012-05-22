@@ -20,7 +20,7 @@ package backstage2d.display.classic
 	{
 		protected var sprite:Sprite;
 		
-		public var quality:String = StageQuality.BEST;
+		//public var quality:String = StageQuality.BEST;
 		
 		public function BSSprite( sprite:Sprite ) 
 		{

@@ -97,15 +97,15 @@ package
 		{
 			var timeSec:Number = getTimer() / 500;
 			
-			//image3.x = image2.x = image.x = stage.stageWidth / 2;
-			//image3.y = image2.y = image.y = stage.stageHeight / 2;
+			image3.x = image2.x = image.x = stage.stageWidth / 2;
+			image3.y = image2.y = image.y = stage.stageHeight / 2;
 			//image.registration.x = 0;
 			//image.registration.y = 0;
-			//image.rotation += 0.01;
-			//image2.rotation -= 0.02;
+			image.rotation += 0.01;
+			image2.rotation -= 0.02;
 			
-			//image.scaleX   = 2 + Math.sin(timeSec);
-			//image.scaleY   = 2 + Math.sin(timeSec);
+			image.scaleX   = 2 + Math.sin(timeSec);
+			image.scaleY   = 2 + Math.sin(timeSec);
 		}
 		
 		private function onEnterFrame(event:Event):void

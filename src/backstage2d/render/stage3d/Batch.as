@@ -187,20 +187,14 @@ package backstage2d.render.stage3d
 				var cosT:Number = Math.cos(sprite.rotation);
 				var alpha:Number = sprite.opacity;
 				
-				var scaledWidth:Number = sprite.widthWithScale;
-				var scaledHeight:Number = sprite.heightWithScale;
+				// use the texture width/height, which may be sized differently from the actor.
+				var scaledWidth:Number = sprite.texNode.rect.width * sprite.scaleX;
+				var scaledHeight:Number = sprite.texNode.rect.height * sprite.scaleY;
 				
 				// adjust the registration point for the texture offset and scale
 				// :TODO: simplify or cache when registration.xy change somehow.
-				// :TODO: invistigate small overlap in test case.
-				// :NOTE: There may be an issue with right / bottom calculations.
-				var regOffsetX:Number = ((sprite.registration.x / sprite.width) - .5) * -2;
-				var regOffsetY:Number = ((sprite.registration.y / sprite.height) - .5) * -2;
-				regOffsetX = sprite.texNode.regOffset.x * regOffsetX;
-				regOffsetY = sprite.texNode.regOffset.y * regOffsetY;
-				
-				var centerX:Number = (sprite.registration.x + regOffsetX) * sprite.scaleX;
-				var centerY:Number = (sprite.registration.y + regOffsetY) * sprite.scaleY;
+				var centerX:Number = (sprite.texNode.regOffset.x + sprite.registration.x ) * sprite.scaleX;
+				var centerY:Number = (sprite.texNode.regOffset.y + sprite.registration.y ) * sprite.scaleY;
 				
 				vertexData[childVertexIdx] = x - (cosT * centerX) - (sinT * (scaledHeight - centerY));
 				vertexData[childVertexIdx+1] = y - (sinT * centerX) + (cosT * (scaledHeight - centerY));
@@ -217,7 +211,6 @@ package backstage2d.render.stage3d
 				vertexData[childVertexIdx+9] = x + (cosT * (scaledWidth - centerX)) - (sinT * (scaledHeight - centerY));
 				vertexData[childVertexIdx+10] = y + (sinT * (scaledWidth - centerX)) + (cosT * (scaledHeight - centerY));
 				vertexData[childVertexIdx+11] = alpha;
-				
 			}
 			else {
 				for (var i:uint = 0; i < 12; i++ ) {
