@@ -11,11 +11,10 @@ package backstage2d.display.spritesheets
 	import backstage2d.display.Actor;
 	
 	import backstage2d.namespaces.bs2d;
+	use namespace bs2d;
 	
 	public class SpriteSheet
 	{
-		use namespace bs2d;
-		
 		public var ss:BitmapData// = null;
 		bs2d var nodes:Vector.<SpriteNode> = new <SpriteNode>[];
 		
