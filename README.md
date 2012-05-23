@@ -1,12 +1,12 @@
-=== Backstage2D ===
+# Backstage2D #
 
 An Actionscript 2D engine for Stage3D.
 
-== Description ==
+## Description ##
 
 Working on it.
 
-== Changelog ==
+## Changelog ##
 
-= 0.0 =
+# 0.0 #
 * Git init.

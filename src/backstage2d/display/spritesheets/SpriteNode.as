@@ -1,6 +1,7 @@
 package backstage2d.display.spritesheets 
 {
 	import backstage2d.display.Actor;
+	import flash.geom.Point;
 	import flash.geom.Rectangle;
 	
 	/**
@@ -12,6 +13,7 @@ package backstage2d.display.spritesheets
 		public var left:SpriteNode;
 		public var right:SpriteNode;
 		public var rect:Rectangle;
+		public var regOffset:Point = new Point();
 		
 		protected var leaf:Boolean// = false;
 		//public var actor:Actor;

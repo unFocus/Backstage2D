@@ -18,6 +18,8 @@ package backstage2d.display
 	 */
 	public class Actor implements IDraw
 	{
+		public var name:String;
+		
 		public var x:Number = 0;
 		public var y:Number = 0;
 		

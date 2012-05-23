@@ -58,13 +58,13 @@ package bunnymark
 		private var bg:Background;
 		private var _width:Number = 640;
 		private var _height:Number = 960;
-		private var tf:TextField;	
+		private var tf:TextField;
 		
 		private var fps:FPS;
 		
 		private var _bunnyLayer : BunnyLayer;
 		private var _pirateLayer : PirateLayer;
-		private var numBunnies:int = 100;	
+		private var numBunnies:int = 100;
 		private var incBunnies:int = 100;
 		
 		private var backstage:Backstage2D;

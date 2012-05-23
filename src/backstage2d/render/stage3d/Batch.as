@@ -14,7 +14,7 @@ package backstage2d.render.stage3d
 	import flash.display3D.Program3D;
 	import flash.display3D.VertexBuffer3D;
 	import flash.geom.Rectangle;
-
+	
 	import backstage2d.namespaces.bs2d;
 	use namespace bs2d;
 	
@@ -47,7 +47,7 @@ package backstage2d.render.stage3d
 		public function Batch( layer:Layer ):void
 		{
 			this.layer = layer;
-			atlas = new TextureAtlas(256, 256);
+			atlas = new TextureAtlas(512, 512);
 		}
 		
 		protected function dispose():void {
@@ -151,7 +151,7 @@ package backstage2d.render.stage3d
 			for ( var i:uint, n:uint = layer.actors.length; i < n; i = i + 1) {
 				updateChildVertexData( layer.actors[ i ], i );
 			}
-            
+			
 			var _context3D:Context3D = context.context3D;
 			
 			_context3D.setProgram( shader );
@@ -159,7 +159,7 @@ package backstage2d.render.stage3d
 			_context3D.setProgramConstantsFromMatrix(Context3DProgramType.VERTEX, 0, context.viewMatrix, true); 
 			_context3D.setTextureAt(0, atlas.texture );
 			
-            if ( _updateVBOs ) {
+			if ( _updateVBOs ) {
 				_vertexBuffer = _context3D.createVertexBuffer( vertexData.length/3, 3);   
 				_indexBuffer = _context3D.createIndexBuffer( indexData.length);
 				_uvBuffer = _context3D.createVertexBuffer( uvData.length/2, 2);
@@ -176,45 +176,48 @@ package backstage2d.render.stage3d
 		}
 		
 		protected function updateChildVertexData( sprite:Actor, index:uint ):void
-        {
-            var childVertexIdx:uint = index * 12;
+		{
+			var childVertexIdx:uint = index * 12;
 			
-            if ( sprite.visible )
+			if ( sprite.visible )
 			{
-                var x:Number = sprite.x;
-                var y:Number = sprite.y;
+				var x:Number = sprite.x;
+				var y:Number = sprite.y;
 				
-                var sinT:Number = Math.sin(sprite.rotation);
-                var cosT:Number = Math.cos(sprite.rotation);
+				var sinT:Number = Math.sin(sprite.rotation);
+				var cosT:Number = Math.cos(sprite.rotation);
 				var alpha:Number = sprite.opacity;
-                
-                var scaledWidth:Number = sprite.widthWithScale;
-                var scaledHeight:Number = sprite.heightWithScale;
-                var centerX:Number = sprite.registration.x * sprite.scaleX;
-                var centerY:Number = sprite.registration.y * sprite.scaleY;
-                
-                vertexData[childVertexIdx] = x - (cosT * centerX) - (sinT * (scaledHeight - centerY));
-                vertexData[childVertexIdx+1] = y - (sinT * centerX) + (cosT * (scaledHeight - centerY));
+				
+				// use the texture width/height, which may be sized differently from the actor.
+				var scaledWidth:Number = sprite.texNode.rect.width * sprite.scaleX;
+				var scaledHeight:Number = sprite.texNode.rect.height * sprite.scaleY;
+				
+				// adjust the registration point for the texture offset and scale
+				// :TODO: simplify or cache when registration.xy change somehow.
+				var centerX:Number = (sprite.texNode.regOffset.x + sprite.registration.x ) * sprite.scaleX;
+				var centerY:Number = (sprite.texNode.regOffset.y + sprite.registration.y ) * sprite.scaleY;
+				
+				vertexData[childVertexIdx] = x - (cosT * centerX) - (sinT * (scaledHeight - centerY));
+				vertexData[childVertexIdx+1] = y - (sinT * centerX) + (cosT * (scaledHeight - centerY));
 				vertexData[childVertexIdx+2] = alpha;
 				
-                vertexData[childVertexIdx+3] = x - (cosT * centerX) + (sinT * centerY);
-                vertexData[childVertexIdx+4] = y - (sinT * centerX) - (cosT * centerY);
+				vertexData[childVertexIdx+3] = x - (cosT * centerX) + (sinT * centerY);
+				vertexData[childVertexIdx+4] = y - (sinT * centerX) - (cosT * centerY);
 				vertexData[childVertexIdx+5] = alpha;
 				
-                vertexData[childVertexIdx+6] = x + (cosT * (scaledWidth - centerX)) + (sinT * centerY);
-                vertexData[childVertexIdx+7] = y + (sinT * (scaledWidth - centerX)) - (cosT * centerY);
+				vertexData[childVertexIdx+6] = x + (cosT * (scaledWidth - centerX)) + (sinT * centerY);
+				vertexData[childVertexIdx+7] = y + (sinT * (scaledWidth - centerX)) - (cosT * centerY);
 				vertexData[childVertexIdx+8] = alpha;
 				
-                vertexData[childVertexIdx+9] = x + (cosT * (scaledWidth - centerX)) - (sinT * (scaledHeight - centerY));
-                vertexData[childVertexIdx+10] = y + (sinT * (scaledWidth - centerX)) + (cosT * (scaledHeight - centerY));
+				vertexData[childVertexIdx+9] = x + (cosT * (scaledWidth - centerX)) - (sinT * (scaledHeight - centerY));
+				vertexData[childVertexIdx+10] = y + (sinT * (scaledWidth - centerX)) + (cosT * (scaledHeight - centerY));
 				vertexData[childVertexIdx+11] = alpha;
-				
-            }
-            else {
-                for (var i:uint = 0; i < 12; i++ ) {
-                    vertexData[childVertexIdx+i] = 0;
-                }
-            }
-        }
+			}
+			else {
+				for (var i:uint = 0; i < 12; i++ ) {
+					vertexData[childVertexIdx+i] = 0;
+				}
+			}
+		}
 	}
 }
