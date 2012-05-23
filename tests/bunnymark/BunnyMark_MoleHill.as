@@ -88,8 +88,8 @@ package bunnymark
 			
 			createCounter();
 			
-			backstage = new Backstage2D( _width, _height, stage.stage3Ds[0] );
-			
+			backstage = new Backstage2D( stage.stage3Ds[0] );
+			backstage.context.configure( _width, _height, AntiAliasQuality.HIGH );
 			backstage.context.created.add( whenContextCreated );
 			backstage.context.failed.add( errorHandler );
 			//renderer.context.lost.add( onContextLost );
@@ -117,7 +117,7 @@ package bunnymark
 			//add background which does not use any framework, use render() to make the necessary draw calls
 			bg = new Background(context3D,_width,_height);
 			
-			backstage.quality = AntiAliasQuality.HIGH;
+			backstage.context.configure( _width, _height, AntiAliasQuality.HIGH );
 			stage.addEventListener(Event.ENTER_FRAME,onEnterFrame);
 		}
 		private function errorHandler(e:ErrorEvent):void {

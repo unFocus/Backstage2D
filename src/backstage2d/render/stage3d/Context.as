@@ -22,6 +22,21 @@ package backstage2d.render.stage3d
 		public const failed:SignalLite = new SignalLite();
 		public const lost:SignalLite = new SignalLite();
 		
+		protected var _width:int// = 0;
+		public function get width():int {
+			return _width;
+		}
+		
+		protected var _height:int// = 0;
+		public function get height():int {
+			return _height;
+		}
+		
+		protected var _quality:int// = 0;
+		public function get quality():int {
+			return _quality;
+		}
+		
 		protected var _checkErrors:Boolean// = false;
 		public function set checkErrors( checkErrors:Boolean ):void {
 			_checkErrors = checkErrors;
@@ -57,15 +72,23 @@ package backstage2d.render.stage3d
 			context3D = stage3D.context3D;
 			context3D.enableErrorChecking = _checkErrors;
 			
-			trace( context3D.driverInfo );
+			if ( viewMatrix ) {
+				context3D.configureBackBuffer( _width, _height, _quality );
+			}
 			
 			created.dispatch( this );
 		}
 		
 		internal var viewMatrix:Matrix3D;
-		public function configure( width:int, height:int, quality:int = 0 ):void
+		public function configure( width:int, height:int, quality:int = -1 ):void
 		{
-			context3D.configureBackBuffer( width, height, quality, false );
+			_width = width;
+			_height = height;
+			_quality = quality > -1 ? quality : _quality;
+			
+			if ( null !== context3D && context3D.driverInfo !== "Disposed" ) {
+				context3D.configureBackBuffer( width, height, _quality, false );
+			}
 			
 			viewMatrix = new Matrix3D();
 			viewMatrix.appendTranslation(-width/2, -height/2, 0);

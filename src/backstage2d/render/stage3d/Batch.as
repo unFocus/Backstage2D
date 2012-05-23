@@ -19,11 +19,12 @@ package backstage2d.render.stage3d
 	use namespace bs2d;
 	
 	/**
-	* Note: Giant parts of this class are based on (or copied from) example
-	* code from Julian Wixson and Aaron Charbonneau of Adobe.
-	* Thanks!!
-	* @author Kevin Newman
-	*/
+	 * This is the main Batch, where the heavy lifting on the GPU is performed.
+	 * Note: Giant parts of this class are based on (or copied from) example
+	 * code from Julian Wixson and Aaron Charbonneau of Adobe.
+	 * Thanks!!
+	 * @author Kevin Newman
+	 */
 	final public class Batch 
 	{
 		public var layer:Layer;
