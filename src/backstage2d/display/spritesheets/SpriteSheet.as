@@ -87,7 +87,6 @@ package backstage2d.display.spritesheets
 				// gets the left top offset.
 				leaf.regOffset.x = m.tx - bounds.x;
 				leaf.regOffset.y = m.ty - bounds.y;
-				// the registration offset percentage is taken care of in the batch
 				
 				actor.texID = nodes.length;
 				nodes.push( leaf );

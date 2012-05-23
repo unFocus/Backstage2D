@@ -1,4 +1,4 @@
-package
+﻿package
 {
 	import backstage2d.display.classic.BSSprite;
 	import backstage2d.display.Layer;
@@ -54,8 +54,8 @@ package
 			image3.registration.y = image3.height;
 			image3.opacity = .25;
 			
-			backstage = new Backstage2D( stage.stageWidth, stage.stageHeight, stage.stage3Ds[0] );
-			
+			backstage = new Backstage2D( stage.stage3Ds[0] );
+			backstage.context.configure( stage.stageWidth, stage.stageHeight, AntiAliasQuality.HIGH );
 			backstage.context.created.add( onContextCreated );
 			backstage.context.failed.add( onContextFail );
 			backstage.context.lost.add( onContextLost );
@@ -68,7 +68,7 @@ package
 		}
 		
 		private function onResize( event:Event ):void {
-			backstage.setSize( stage.stageWidth, stage.stageHeight );
+			backstage.context.configure( stage.stageWidth, stage.stageHeight, AntiAliasQuality.HIGH );
 		}
 		
 		private function onContextLost():void 
@@ -89,7 +89,6 @@ package
 		{
 			trace("Context3D created");
 			
-			backstage.quality = AntiAliasQuality.HIGH;
 			addEventListener( Event.ENTER_FRAME, onEnterFrame );
 		}
 		

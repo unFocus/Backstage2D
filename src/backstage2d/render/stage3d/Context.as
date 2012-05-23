@@ -73,7 +73,7 @@ package backstage2d.render.stage3d
 			context3D.enableErrorChecking = _checkErrors;
 			
 			if ( viewMatrix ) {
-				context3D.configureBackBuffer( _width, _height, _quality );
+				context3D.configureBackBuffer( _width, _height, _quality, false );
 			}
 			
 			created.dispatch( this );
