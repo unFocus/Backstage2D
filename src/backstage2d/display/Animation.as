@@ -10,7 +10,7 @@ package backstage2d.display
 		public var totalFrames:int;
 		public var currentFrame:int;
 		
-		public function Animation( width:Number = 0, height:Number = 0 ) 
+		public function Animation( width:Number = 0, height:Number = 0, frameRate:Number = 0 ) 
 		{
 			super( width, height);
 			this.frameRate = frameRate;

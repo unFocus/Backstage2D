@@ -69,12 +69,16 @@ package bunnymark
 		
 		private var backstage:Backstage2D;
 		
+		private var view:Rectangle;
+		
 		public function BunnyMark_MoleHill() {
 			if ( stage ) init( null );
 			else addEventListener( Event.ADDED_TO_STAGE, init );
 		}
 		private function init( event:Event ):void
 		{
+			removeEventListener( Event.ADDED_TO_STAGE, init );
+			
 			stage.quality = StageQuality.LOW;
 			stage.align = StageAlign.TOP_LEFT;
 			stage.scaleMode = StageScaleMode.NO_SCALE;
@@ -92,10 +96,10 @@ package bunnymark
 			backstage.context.configure( _width, _height, AntiAliasQuality.HIGH );
 			backstage.context.created.add( whenContextCreated );
 			backstage.context.failed.add( errorHandler );
-			//renderer.context.lost.add( onContextLost );
+			backstage.context.lost.add( whenContextLost );
 			
 			//add bunny layer
-			var view:Rectangle = new Rectangle(0, 0, _width, _height);
+			view = new Rectangle(0, 0, _width, _height);
 			_bunnyLayer = new BunnyLayer(view);
 			var layer:Layer = _bunnyLayer.createRenderLayer();
 			
@@ -107,22 +111,35 @@ package bunnymark
 			layer = _pirateLayer.createRenderLayer();
 			backstage.addLayer( layer );
 			
-			backstage.start();
+			backstage.build();
 		}
 		
 		private function whenContextCreated( context:Context ):void
 		{
+			backstage.start();
+			
 			context3D = context.context3D;
 			
 			//add background which does not use any framework, use render() to make the necessary draw calls
-			bg = new Background(context3D,_width,_height);
+			bg = new Background(context3D, _width, _height);
+			bg.setup();
+			bg.setPosition(view);
 			
 			backstage.context.configure( _width, _height, AntiAliasQuality.HIGH );
-			stage.addEventListener(Event.ENTER_FRAME,onEnterFrame);
+			
+			// START / RESUME
+			stage.addEventListener( Event.ENTER_FRAME, onEnterFrame );
 		}
+		private function whenContextLost():void
+		{
+			// PAUSE
+			stage.removeEventListener(Event.ENTER_FRAME, onEnterFrame);
+		}
+		
 		private function errorHandler(e:ErrorEvent):void {
 			trace("ErrorEvent: "+e.errorID);
 		}
+		
 		protected function onResizeEvent(event:Event) : void
 		{
 			// Set correct dimensions if we resize
@@ -130,7 +147,8 @@ package bunnymark
 			_height = stage.stageHeight;
 			
 			// Resize Stage3D to continue to fit screen
-			var view:Rectangle = new Rectangle(0, 0, _width, _height);
+			view.width = _width;
+			view.height = _height;
 			
 			if(_bunnyLayer != null) {
 				_bunnyLayer.setPosition(view);
@@ -151,6 +169,9 @@ package bunnymark
 		
 		private function onEnterFrame(e:Event):void
 		{
+			if ( !backstage.context.verify() ) {
+				return;
+			}
 			//try {
 				context3D.clear(0,1,0,1);
 				bg.render();

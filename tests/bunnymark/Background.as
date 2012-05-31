@@ -52,7 +52,7 @@ package bunnymark
 		private var tex:Texture;
 		private var _width:Number;
 		private var _height:Number;
-		private var texBM:Bitmap;
+		private var texBM:Bitmap = new Grass();;
 		private var _modelViewMatrix : Matrix3D;
 		
 		//variables for vertexBuffer manipulation
@@ -67,14 +67,14 @@ package bunnymark
 		public var numVertices:int;
 		public var numIndices:int;
 		
-		public function Background(ctx3D:Context3D,w:Number, h:Number)
+		public function Background( ctx3D:Context3D, w:Number, h:Number )
 		{
 			context3D = ctx3D;
-			_width = w;
-			_height = h;
-				
+		}
+		
+		public function setup():void
+		{
 			//create background texture
-			texBM = new Grass();
 			tex = context3D.createTexture(texBM.width, texBM.height, Context3DTextureFormat.BGRA,false);
 			tex.uploadFromBitmapData(texBM.bitmapData,0);
 			

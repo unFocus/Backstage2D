@@ -1,6 +1,6 @@
 package backstage2d.display.spritesheets 
 {
-	import backstage2d.display.Actor;
+	import backstage2d.display.*;
 	import flash.geom.Point;
 	import flash.geom.Rectangle;
 	

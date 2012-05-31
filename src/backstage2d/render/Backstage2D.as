@@ -39,9 +39,6 @@ package backstage2d.render
 		protected function onContextCreated( context:Context ):void
 		{
 			this.context = context;
-			for each ( var batch:Batch in batches ) {
-				batch.activate( context );
-			}
 		}
 		
 		/**
@@ -58,13 +55,23 @@ package backstage2d.render
 		}
 		
 		/**
+		 * Builds all the layers in the backstage.
+		 */
+		public function build():void
+		{
+			for each ( var batch:Batch in batches ) {
+				batch.build();
+			}
+		}
+		
+		/**
 		 * Starts the augmentation engine. This will build any unbuilt layer/batches,
 		 * and start the renderer.
 		 */
 		public function start():void
 		{
 			for each ( var batch:Batch in batches ) {
-				batch.build();
+				batch.activate( context );
 			}
 		}
 		

@@ -2,7 +2,7 @@ package backstage2d.render.stage3d
 {
 	import backstage2d.display.Actor;
 	import backstage2d.display.Layer;
-	import backstage2d.display.spritesheets.SpriteNode;
+	import backstage2d.display.spritesheets.*;
 	
 	import com.adobe.utils.AGALMiniAssembler;
 	
@@ -137,6 +137,8 @@ package backstage2d.render.stage3d
 					atlas.made.remove( atlasMade );
 					atlas.upload( context3D );
 				} );*/
+			
+			_updateVBOs = true;
 		}
 		
 		public function draw():void

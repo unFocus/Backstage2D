@@ -55,13 +55,14 @@ package backstage2d.render.stage3d
 			var canvas:BitmapData = new BitmapData(currentWidth, currentHeight, true, 0);
 			var transform:Matrix = new Matrix(.5, 0, 0, .5);
 			
-			while ( currentWidth >= 1 || currentHeight >= 1 ) {
-			canvas.fillRect(new Rectangle(0, 0, Math.max(currentWidth,1), Math.max(currentHeight,1)), 0);
-			canvas.draw(ss, transform, null, null, null, true);
-			texture.uploadFromBitmapData(canvas, level++);
-			transform.scale(0.5, 0.5);
-			currentWidth = currentWidth >> 1;
-			currentHeight = currentHeight >> 1;
+			while ( currentWidth >= 1 || currentHeight >= 1 )
+			{
+				canvas.fillRect(new Rectangle(0, 0, Math.max(currentWidth,1), Math.max(currentHeight,1)), 0);
+				canvas.draw(ss, transform, null, null, null, true);
+				texture.uploadFromBitmapData(canvas, level++);
+				transform.scale(0.5, 0.5);
+				currentWidth = currentWidth >> 1;
+				currentHeight = currentHeight >> 1;
 			}
 		}
 	}

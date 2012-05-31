@@ -18,7 +18,7 @@ package backstage2d.display.classic
 	{
 		protected var clip:MovieClip;
 		
-		public var quality:String = StageQuality.BEST;
+		//public var quality:String = StageQuality.BEST;
 		
 		public function BSMovieClip( clip:MovieClip, frameRate:Number = 20 ) 
 		{
@@ -30,10 +30,10 @@ package backstage2d.display.classic
 		bs2d var frameNodes:Vector.<SpriteNode> = new <SpriteNode>[];
 		
 		override bs2d function set texNode( node:SpriteNode ):void {
-			SpriteRegistry.instance[ sprite ] = node;
+			SpriteRegistry.instance[ clip ] = node;
 		}
 		override bs2d function get texNode():SpriteNode {
-			return SpriteRegistry.instance[ sprite ];
+			return SpriteRegistry.instance[ clip ];
 		}
 		
 		/**
@@ -42,8 +42,8 @@ package backstage2d.display.classic
 		 */
 		public override function draw( canvas:BitmapData, transform:Matrix = null ):BitmapData
 		{
-			clip.gotoAndStop( i );
-			canvas.draw( data, transform, null, null, null, true );
+			//clip.gotoAndStop( 1 );
+			//canvas.draw( data, transform, null, null, null, true );
 			
 			return canvas;
 		}
