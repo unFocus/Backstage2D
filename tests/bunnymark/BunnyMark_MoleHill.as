@@ -93,7 +93,7 @@ package bunnymark
 			createCounter();
 			
 			backstage = new Backstage2D( stage.stage3Ds[0] );
-			backstage.context.configure( _width, _height, AntiAliasQuality.HIGH );
+			
 			backstage.context.created.add( whenContextCreated );
 			backstage.context.failed.add( errorHandler );
 			backstage.context.lost.add( whenContextLost );

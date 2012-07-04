@@ -43,7 +43,7 @@ package bunnymark
 	public class Background
 	{
 		[Embed(source="../../assets/grass.png")]
-		private var Grass : Class;
+		static private const Grass : Class;
 		private var context3D:Context3D;
 		private var vb:VertexBuffer3D;
 		private var uvb:VertexBuffer3D;
@@ -52,7 +52,7 @@ package bunnymark
 		private var tex:Texture;
 		private var _width:Number;
 		private var _height:Number;
-		private var texBM:Bitmap = new Grass();;
+		static private const texBM:Bitmap = new Grass();
 		private var _modelViewMatrix : Matrix3D;
 		
 		//variables for vertexBuffer manipulation
@@ -106,7 +106,7 @@ package bunnymark
 				"mov v0, va1       \n");        // pass texture coordinates to fragment program	
 			var miniasm_fragment : AGALMiniAssembler = new AGALMiniAssembler (); 
 			miniasm_fragment.assemble(Context3DProgramType.FRAGMENT,		
-				"tex oc, v0, fs0 <2d, nearest,wrap>" );// sample texture 0
+				"tex oc, v0, fs0 <2d,linear,miplinear,wrap>" );// sample texture 0
 			shader_program = context3D.createProgram();
 			shader_program.upload( miniasm_vertex.agalcode, miniasm_fragment.agalcode );		
 			
