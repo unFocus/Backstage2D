@@ -22,6 +22,8 @@ package backstage2d.render.stage3d
 	{
 		internal var texture:Texture;
 		
+		public var useMips:Boolean = true;
+		
 		//public const made:SignalLite = new SignalLite();
 		
 		// :HACK: This really needs to be more robust, but this gets us done for the moment.
@@ -43,26 +45,32 @@ package backstage2d.render.stage3d
 			
 			if ( nodes.length == lastUploadedNodeCount)
 				return;
-			else 
+			else
 				lastUploadedNodeCount = nodes.length;
 			
 			texture.uploadFromBitmapData( ss );
 			
-			// Courtesy of Starling: let's generate mipmaps
-			var currentWidth:int = ss.width >> 1;
-			var currentHeight:int = ss.height >> 1;
-			var level:int = 1;
-			var canvas:BitmapData = new BitmapData(currentWidth, currentHeight, true, 0);
-			var transform:Matrix = new Matrix(.5, 0, 0, .5);
-			
-			while ( currentWidth >= 1 || currentHeight >= 1 )
+			if (useMips)
 			{
-				canvas.fillRect(new Rectangle(0, 0, Math.max(currentWidth,1), Math.max(currentHeight,1)), 0);
-				canvas.draw(ss, transform, null, null, null, true);
-				texture.uploadFromBitmapData(canvas, level++);
-				transform.scale(0.5, 0.5);
-				currentWidth = currentWidth >> 1;
-				currentHeight = currentHeight >> 1;
+				// Courtesy of Starling: let's generate mipmaps
+				var currentWidth:int = ss.width >> 1;
+				var currentHeight:int = ss.height >> 1;
+				var level:int = 1;
+				var canvas:BitmapData = new BitmapData(currentWidth, currentHeight, true, 0);
+				var transform:Matrix = new Matrix(.5, 0, 0, .5);
+				var rect:Rectangle = new Rectangle;
+				
+				while ( currentWidth >= 1 || currentHeight >= 1 )
+				{
+					rect.width = Math.max(currentWidth, 1);
+					rect.height = Math.max(currentHeight, 1);
+					canvas.fillRect(rect, 0);
+					canvas.draw(ss, transform, null, null, null, true);
+					texture.uploadFromBitmapData(canvas, level++);
+					transform.scale(0.5, 0.5);
+					currentWidth = currentWidth >> 1;
+					currentHeight = currentHeight >> 1;
+				}
 			}
 		}
 	}
