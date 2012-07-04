@@ -105,8 +105,7 @@ package bunnymark
 				"m44 op, va0, vc0  \n" +        // 4x4 matrix transform to output clipspace
 				"mov v0, va1       \n");        // pass texture coordinates to fragment program	
 			var miniasm_fragment : AGALMiniAssembler = new AGALMiniAssembler (); 
-			miniasm_fragment.assemble(Context3DProgramType.FRAGMENT,		
-				"tex oc, v0, fs0 <2d, nearest,wrap>" );// sample texture 0
+			miniasm_fragment.assemble(Context3DProgramType.FRAGMENT,
 				"tex oc, v0, fs0 <2d,linear,miplinear,wrap>" );// sample texture 0
 			shader_program = context3D.createProgram();
 			shader_program.upload( miniasm_vertex.agalcode, miniasm_fragment.agalcode );		
