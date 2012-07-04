@@ -50,7 +50,7 @@ package bunnymark
 	import flash.utils.getTimer;
 	import backstage2d.render.stage3d.AntiAliasQuality;
 	
-	[SWF(width="640", height="960", frameRate="60", backgroundColor="#ffffff")]
+	[SWF(width="640", height="480", frameRate="60", backgroundColor="#ffffff")]
 	public class BunnyMark_MoleHill extends Sprite
 	{
 		public const RENDERMODE:String = Context3DRenderMode.AUTO;
@@ -71,6 +71,8 @@ package bunnymark
 		
 		private var view:Rectangle;
 		
+		private var version:TextField;
+		
 		public function BunnyMark_MoleHill() {
 			if ( stage ) init( null );
 			else addEventListener( Event.ADDED_TO_STAGE, init );
@@ -89,6 +91,9 @@ package bunnymark
 			
 			fps = new FPS();
 			addChild(fps);
+			
+			version = new TextField();
+			version.autoSize = TextFieldAutoSize.RIGHT;
 			
 			createCounter();
 			
@@ -119,6 +124,12 @@ package bunnymark
 			backstage.start();
 			
 			context3D = context.context3D;
+			context.checkErrors = true;
+			version.text = context3D.driverInfo;
+			
+			version.x = stage.stageWidth/2;
+			version.y = stage.stageHeight / 2;
+			addChild( version );
 			
 			//add background which does not use any framework, use render() to make the necessary draw calls
 			bg = new Background(context3D, _width, _height);

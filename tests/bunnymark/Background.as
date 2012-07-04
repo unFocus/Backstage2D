@@ -106,7 +106,7 @@ package bunnymark
 				"mov v0, va1       \n");        // pass texture coordinates to fragment program	
 			var miniasm_fragment : AGALMiniAssembler = new AGALMiniAssembler (); 
 			miniasm_fragment.assemble(Context3DProgramType.FRAGMENT,		
-				"tex oc, v0, fs0 <2d, nearest,wrap>" );// sample texture 0
+				"tex oc, v0, fs0 <2d,nearest,wrap,miplinear>" );// sample texture 0
 			shader_program = context3D.createProgram();
 			shader_program.upload( miniasm_vertex.agalcode, miniasm_fragment.agalcode );		
 			
