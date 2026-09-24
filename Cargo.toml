@@ -1,0 +1,27 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = ""
+
+[workspace.dependencies]
+backstage_core = { path = "crates/backstage_core" }
+backstage_protocol = { path = "crates/backstage_protocol" }
+backstage_render = { path = "crates/backstage_render" }
+backstage_script = { path = "crates/backstage_script" }
+
+anyhow = "1.0.104"
+bytemuck = { version = "1.25", features = ["derive"] }
+memmap2 = "0.9.11"
+pollster = "1.0.1"
+postcard = { version = "1.1.3", features = ["use-std"] }
+serde = { version = "1.0.229", features = ["derive"] }
+wgpu = "30.0.1"
+
+# Tools (GUI) only. Runtime-side crates must not depend on these.
+gtk = { package = "gtk4", version = "0.11.5", features = ["v4_14"] }
+relm4 = "0.11.0"

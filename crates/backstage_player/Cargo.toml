@@ -1,0 +1,10 @@
+[package]
+name = "backstage_player"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+backstage_core.workspace = true
+backstage_render.workspace = true
+backstage_script.workspace = true

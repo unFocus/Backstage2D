@@ -1,0 +1,10 @@
+[package]
+name = "backstage_protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+memmap2.workspace = true
+postcard.workspace = true
+serde.workspace = true

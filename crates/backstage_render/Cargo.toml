@@ -1,0 +1,9 @@
+[package]
+name = "backstage_render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bytemuck.workspace = true
+wgpu.workspace = true

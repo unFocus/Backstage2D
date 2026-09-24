@@ -1,0 +1,13 @@
+# Planning docs
+
+- [vision.md](vision.md): what Backstage2D is, and what it isn't
+- [architecture.md](architecture.md): crate layout and core data model
+- [timeline-and-display-list.md](timeline-and-display-list.md): the Flash-derived core concepts
+- [rendering.md](rendering.md): wgpu renderer plan
+- [scripting.md](scripting.md): scripting language options
+- [platforms.md](platforms.md): supported platforms (modern only, Wayland first)
+- [dev-setup.md](dev-setup.md): building on the dev host (GTK via Homebrew)
+- [roadmap.md](roadmap.md): milestones
+- [adr/](adr/): architecture decision records (one file per decision)
+  - [0001: GUI framework](adr/0001-gui-framework.md)
+  - [0002: Stage process isolation](adr/0002-stage-process-isolation.md)
