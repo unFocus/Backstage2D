@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use backstage_protocol::{
     FRAME_SLOTS, FrameRing, PROTOCOL_VERSION, ToStage, ToTools, read_message, write_message,
 };
-use backstage_render::{Renderer, TestScene};
+use backstage_render::{HeadlessGpu, OFFSCREEN_FORMAT, OffscreenTarget, Renderer, TestScene};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -17,15 +17,30 @@ use std::time::{Duration, Instant};
 
 const FRAME_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 60);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
-const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 fn main() -> Result<()> {
-    let socket_path = parse_args()?;
+    match run() {
+        // The tools process went away mid-write: that's a normal shutdown.
+        Err(e) if is_disconnect(&e) => Ok(()),
+        result => result,
+    }
+}
+
+fn is_disconnect(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<std::io::Error>().is_some_and(|e| {
+        matches!(e.kind(), std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset)
+    })
+}
+
+fn run() -> Result<()> {
+    let socket_path = parse_args(std::env::args().skip(1))?;
     let mut socket = UnixStream::connect(&socket_path)
         .with_context(|| format!("connecting to {}", socket_path.display()))?;
     let inbox = spawn_reader(socket.try_clone()?);
 
-    let gpu = pollster::block_on(Gpu::new())?;
+    let gpu = pollster::block_on(HeadlessGpu::new("stage"))
+        .map_err(|e| anyhow::anyhow!("initializing GPU: {e}"))?;
+    eprintln!("backstage_stage: using {}", gpu.adapter_name);
     write_message(
         &mut socket,
         &ToTools::Hello {
@@ -35,7 +50,7 @@ fn main() -> Result<()> {
         },
     )?;
 
-    let mut renderer = Renderer::new(&gpu.device, FORMAT);
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut target: Option<Target> = None;
     let mut generation = 0u64;
     let mut seq = 0u64;
@@ -59,7 +74,7 @@ fn main() -> Result<()> {
                         target = None;
                         continue;
                     }
-                    if target.as_ref().is_some_and(|t| t.size == (width, height)) {
+                    if target.as_ref().is_some_and(|t| t.offscreen.size() == (width, height)) {
                         continue;
                     }
                     generation += 1;
@@ -71,7 +86,7 @@ fn main() -> Result<()> {
                             path: t.ring_path.display().to_string(),
                             width,
                             height,
-                            stride: t.stride,
+                            stride: t.offscreen.stride(),
                         },
                     )?;
                     target = Some(t);
@@ -83,11 +98,7 @@ fn main() -> Result<()> {
         }
 
         if let Some(t) = target.as_mut() {
-            let scene = TestScene {
-                time: started.elapsed().as_secs_f32(),
-                scale: scale as f32,
-                pointer,
-            };
+            let scene = TestScene { time: started.elapsed().as_secs_f32(), scale: scale as f32, pointer };
             seq += 1;
             let slot = (seq % FRAME_SLOTS as u64) as u32;
             t.render_into_ring(&gpu, &mut renderer, &scene, slot, seq)?;
@@ -107,10 +118,9 @@ fn main() -> Result<()> {
     }
 }
 
-fn parse_args() -> Result<PathBuf> {
-    let mut args = std::env::args().skip(1);
-    match (args.next().as_deref(), args.next()) {
-        (Some("--socket"), Some(path)) => Ok(path.into()),
+fn parse_args(mut args: impl Iterator<Item = String>) -> Result<PathBuf> {
+    match (args.next().as_deref(), args.next(), args.next()) {
+        (Some("--socket"), Some(path), None) => Ok(path.into()),
         _ => bail!("usage: backstage_stage --socket <path>"),
     }
 }
@@ -129,110 +139,35 @@ fn spawn_reader(mut socket: UnixStream) -> mpsc::Receiver<ToStage> {
     rx
 }
 
-struct Gpu {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    adapter_name: String,
-}
-
-impl Gpu {
-    async fn new() -> Result<Self> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                ..Default::default()
-            })
-            .await
-            .context("no suitable GPU adapter")?;
-        let info = adapter.get_info();
-        let adapter_name = format!("{} ({:?})", info.name, info.backend);
-        eprintln!("backstage_stage: using {adapter_name}");
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("stage"),
-                ..Default::default()
-            })
-            .await
-            .context("creating GPU device")?;
-        Ok(Self { device, queue, adapter_name })
-    }
-}
-
-/// Offscreen render target, its readback buffer, and the shared-memory ring
-/// frames are published through. Recreated on every resize.
+/// The offscreen target plus the shared-memory ring its frames are
+/// published through. Recreated on every resize.
 struct Target {
-    size: (u32, u32),
     generation: u64,
-    stride: u32,
-    texture: wgpu::Texture,
-    view: wgpu::TextureView,
-    readback: wgpu::Buffer,
+    offscreen: OffscreenTarget,
     ring: FrameRing,
     ring_path: PathBuf,
 }
 
 impl Target {
     fn new(device: &wgpu::Device, size: (u32, u32), generation: u64) -> Result<Self> {
-        let stride = (size.0 * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("stage target"),
-            size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&Default::default());
-        let readback = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("stage readback"),
-            size: stride as u64 * size.1 as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        let offscreen = OffscreenTarget::new(device, size);
         let ring_path = ring_path(generation)?;
-        let ring = FrameRing::create(&ring_path, stride, size.1)?;
-        Ok(Self { size, generation, stride, texture, view, readback, ring, ring_path })
+        let ring = FrameRing::create(&ring_path, offscreen.stride(), size.1)?;
+        Ok(Self { generation, offscreen, ring, ring_path })
     }
 
     fn render_into_ring(
         &mut self,
-        gpu: &Gpu,
+        gpu: &HeadlessGpu,
         renderer: &mut Renderer,
         scene: &TestScene,
         slot: u32,
         seq: u64,
     ) -> Result<()> {
-        let mut encoder = gpu.device.create_command_encoder(&Default::default());
-        renderer.render(&gpu.device, &gpu.queue, &mut encoder, &self.view, self.size, scene);
-        encoder.copy_texture_to_buffer(
-            self.texture.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &self.readback,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(self.stride),
-                    rows_per_image: None,
-                },
-            },
-            wgpu::Extent3d { width: self.size.0, height: self.size.1, depth_or_array_layers: 1 },
-        );
-        gpu.queue.submit([encoder.finish()]);
-
-        let (tx, rx) = mpsc::channel();
-        self.readback.map_async(wgpu::MapMode::Read, .., move |r| {
-            let _ = tx.send(r);
-        });
-        gpu.device.poll(wgpu::PollType::wait_indefinitely())?;
-        rx.recv()?.context("mapping readback buffer")?;
-        {
-            let pixels = self.readback.get_mapped_range(..)?;
-            self.ring.write(slot, seq, &pixels);
-        }
-        self.readback.unmap();
-        Ok(())
+        let ring = &mut self.ring;
+        self.offscreen
+            .render_and_read(gpu, renderer, scene, |pixels| ring.write(slot, seq, pixels))
+            .map_err(|e| anyhow::anyhow!("rendering frame: {e}"))
     }
 }
 
@@ -249,4 +184,25 @@ fn ring_path(generation: u64) -> Result<PathBuf> {
     let dir = PathBuf::from(runtime).join("backstage2d");
     std::fs::create_dir_all(&dir)?;
     Ok(dir.join(format!("stage-{}-{generation}.frames", std::process::id())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_args;
+
+    fn args(list: &[&str]) -> impl Iterator<Item = String> {
+        list.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter()
+    }
+
+    #[test]
+    fn parses_socket_path() {
+        assert_eq!(parse_args(args(&["--socket", "/run/x.sock"])).unwrap().to_str(), Some("/run/x.sock"));
+    }
+
+    #[test]
+    fn rejects_bad_arguments() {
+        for bad in [&[][..], &["--socket"], &["--sock", "/x"], &["--socket", "/x", "extra"]] {
+            assert!(parse_args(args(bad)).is_err(), "{bad:?}");
+        }
+    }
 }

@@ -1,26 +1,21 @@
 //! The editor window: panels around a live stage section.
 
+use crate::health::{AfterExit, StageHealth};
 use crate::panels;
+use crate::smoke::SmokeTest;
 use crate::stage_view::StageView;
 use crate::supervisor::{StageEvent, Supervisor};
 use backstage_protocol::ToStage;
 use gtk::{gdk, glib, prelude::*};
 use relm4::prelude::*;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
-
-/// No heartbeat or frame for this long means the stage is hung.
-const STALL_TIMEOUT: Duration = Duration::from_secs(3);
-/// Give up auto-restarting after this many crashes in quick succession.
-const MAX_QUICK_CRASHES: u32 = 3;
-const QUICK_CRASH_WINDOW: Duration = Duration::from_secs(5);
 
 pub struct App {
     supervisor: Supervisor,
     stage_view: StageView,
-    connected: bool,
-    last_seen: Instant,
-    started_at: Instant,
-    quick_crashes: u32,
+    health: StageHealth,
+    smoke: Option<SmokeTest>,
     status: String,
     banner: Option<String>,
     frames_this_second: u32,
@@ -29,17 +24,28 @@ pub struct App {
 
 #[derive(Debug)]
 pub enum AppMsg {
-    Stage { session: u64, event: StageEvent },
-    StageResized { width: u32, height: u32, scale: f64 },
+    Stage {
+        session: u64,
+        event: StageEvent,
+    },
+    StageResized {
+        width: u32,
+        height: u32,
+        scale: f64,
+    },
     Pointer(Option<(f32, f32)>),
+    /// User asked for a restart: forgives earlier crashes.
     RestartStage,
+    /// Automatic restart after a crash.
+    AutoRestartStage,
     KillStage,
     Tick,
 }
 
 #[relm4::component(pub)]
 impl SimpleComponent for App {
-    type Init = ();
+    /// Path to the `backstage_stage` binary.
+    type Init = PathBuf;
     type Input = AppMsg;
     type Output = ();
 
@@ -123,15 +129,13 @@ impl SimpleComponent for App {
         }
     }
 
-    fn init(_: (), root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
+    fn init(stage_binary: PathBuf, root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
         relm4::set_global_css(CSS);
         let model = App {
-            supervisor: Supervisor::new(),
+            supervisor: Supervisor::new(stage_binary),
             stage_view: StageView::default(),
-            connected: false,
-            last_seen: Instant::now(),
-            started_at: Instant::now(),
-            quick_crashes: 0,
+            health: StageHealth::new(Instant::now()),
+            smoke: SmokeTest::from_env(),
             status: "Stage starting…".into(),
             banner: None,
             frames_this_second: 0,
@@ -149,6 +153,12 @@ impl SimpleComponent for App {
             s.input(AppMsg::Tick);
             glib::ControlFlow::Continue
         });
+        if model.smoke.is_some() {
+            glib::timeout_add_local_once(crate::smoke::SMOKE_TIMEOUT, || {
+                eprintln!("smoke: timed out");
+                std::process::exit(1);
+            });
+        }
         sender.input(AppMsg::RestartStage);
 
         ComponentParts { model, widgets }
@@ -157,7 +167,7 @@ impl SimpleComponent for App {
     fn update(&mut self, msg: AppMsg, sender: ComponentSender<Self>) {
         match msg {
             AppMsg::Stage { session, event } if session == self.supervisor.session() => {
-                self.last_seen = Instant::now();
+                self.health.saw_event(Instant::now());
                 self.handle_stage_event(event, &sender);
             }
             AppMsg::Stage { .. } => {} // from a stage we already replaced
@@ -165,14 +175,12 @@ impl SimpleComponent for App {
                 self.supervisor.send(&ToStage::Resize { width, height, scale });
             }
             AppMsg::Pointer(p) => self.supervisor.send(&ToStage::Pointer(p)),
-            AppMsg::RestartStage => {
-                self.quick_crashes = 0;
-                self.start_stage(&sender);
-            }
+            AppMsg::RestartStage => self.start_stage(&sender, true),
+            AppMsg::AutoRestartStage => self.start_stage(&sender, false),
             AppMsg::KillStage => self.supervisor.kill(),
             AppMsg::Tick => {
                 self.fps = std::mem::take(&mut self.frames_this_second);
-                if self.connected && self.last_seen.elapsed() > STALL_TIMEOUT {
+                if self.health.is_stalled(Instant::now()) {
                     // Hung, not crashed: kill it and let the exit path restart it.
                     self.status = "Stage stopped responding".into();
                     self.supervisor.kill();
@@ -183,14 +191,12 @@ impl SimpleComponent for App {
 }
 
 impl App {
-    fn start_stage(&mut self, sender: &ComponentSender<Self>) {
-        self.connected = false;
-        self.started_at = Instant::now();
+    fn start_stage(&mut self, sender: &ComponentSender<Self>, manual: bool) {
+        self.health.started(Instant::now(), manual);
         self.status = "Stage starting…".into();
         let input = sender.input_sender().clone();
-        let result = self
-            .supervisor
-            .start(move |session, event| input.emit(AppMsg::Stage { session, event }));
+        let result =
+            self.supervisor.start(move |session, event| input.emit(AppMsg::Stage { session, event }));
         if let Err(e) = result {
             self.status = "Stage failed to start".into();
             self.banner = Some(format!("Could not start stage: {e}"));
@@ -200,7 +206,7 @@ impl App {
     fn handle_stage_event(&mut self, event: StageEvent, sender: &ComponentSender<Self>) {
         match event {
             StageEvent::Connected { pid, adapter } => {
-                self.connected = true;
+                self.health.connected(Instant::now());
                 self.banner = None;
                 self.status = format!("Stage pid {pid} · {adapter}");
                 // The new stage knows nothing yet: send it the current state.
@@ -219,20 +225,17 @@ impl App {
                     );
                     self.stage_view.set_frame(texture.upcast());
                     self.frames_this_second += 1;
+                    if let Some(smoke) = self.smoke.as_mut() {
+                        smoke.frame(self.supervisor.session(), &mut self.supervisor);
+                    }
                 }
             }
             StageEvent::Alive => {}
             StageEvent::Log(line) => eprintln!("stage: {line}"),
             StageEvent::Exited(reason) => {
-                self.connected = false;
                 self.supervisor.reap();
                 self.stage_view.clear_frame();
-                if self.started_at.elapsed() < QUICK_CRASH_WINDOW {
-                    self.quick_crashes += 1;
-                } else {
-                    self.quick_crashes = 0;
-                }
-                if self.quick_crashes >= MAX_QUICK_CRASHES {
+                if self.health.exited(Instant::now()) == AfterExit::GiveUp {
                     self.status = "Stage stopped".into();
                     self.banner =
                         Some(format!("Stage keeps crashing ({reason}).\nUse Restart Stage to retry."));
@@ -242,7 +245,7 @@ impl App {
                 self.banner = Some(format!("Restarting stage…\n({reason})"));
                 let s = sender.clone();
                 glib::timeout_add_local_once(Duration::from_millis(750), move || {
-                    s.input(AppMsg::RestartStage);
+                    s.input(AppMsg::AutoRestartStage);
                 });
             }
         }

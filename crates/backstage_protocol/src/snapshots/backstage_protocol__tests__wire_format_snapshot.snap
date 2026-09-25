@@ -1,0 +1,15 @@
+---
+source: crates/backstage_protocol/src/lib.rs
+expression: out
+---
+PROTOCOL_VERSION = 1
+Hello { version: 1 } => 0001
+Resize { width: 1920, height: 1080, scale: 1.25 } => 01800fb808000000000000f43f
+Pointer(Some((10.5, 20.0))) => 0201000028410000a041
+Pointer(None) => 0200
+Shutdown => 03
+Hello { version: 1, pid: 4242, adapter: "gpu" } => 0001922103677075
+Surface { generation: 2, path: "/run/x", width: 640, height: 480, stride: 2560 } => 0102062f72756e2f788005e0038014
+FrameReady { generation: 2, slot: 1, seq: 300 } => 020201ac02
+Log("hi") => 03026869
+Heartbeat => 04

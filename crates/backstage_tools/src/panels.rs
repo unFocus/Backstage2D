@@ -18,12 +18,9 @@ fn panel(title: &str, body: &impl IsA<gtk::Widget>) -> gtk::Box {
 pub fn library() -> gtk::Box {
     let list = gtk::ListBox::new();
     list.set_vexpand(true);
-    for (name, kind) in [
-        ("Ball", "MovieClip"),
-        ("Background", "Graphic"),
-        ("PlayButton", "Button"),
-        ("logo.png", "Bitmap"),
-    ] {
+    for (name, kind) in
+        [("Ball", "MovieClip"), ("Background", "Graphic"), ("PlayButton", "Button"), ("logo.png", "Bitmap")]
+    {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         row.set_margin_start(8);
         row.set_margin_end(8);

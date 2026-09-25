@@ -10,3 +10,6 @@ backstage_core.workspace = true
 backstage_protocol.workspace = true
 gtk.workspace = true
 relm4.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -14,7 +14,8 @@
 - [x] `backstage_tools`: GTK 4 + Relm4 window with library, stage, properties, and timeline sections
 - [x] Stage supervisor: spawn, crash detection, hang watchdog, auto-restart, stale file cleanup
 - [x] Pointer forwarding (crosshair drawn by the stage)
-- [ ] Measure drag latency of option B (input → visible crosshair)
+- [x] Measure stage-side latency of option B: median 16.6 ms pointer → published frame on the RX 6800 (see ADR 0002)
+- [x] Automated tests: unit, integration, golden images, wire-format snapshot, dependency boundaries, headless UI smoke ([testing.md](testing.md))
 
 ## M1: something on screen
 - [ ] winit + wgpu window in `backstage_player`

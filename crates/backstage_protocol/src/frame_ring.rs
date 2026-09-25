@@ -24,12 +24,7 @@ pub struct FrameRing {
 impl FrameRing {
     /// Creates (or truncates) the backing file and maps it. Stage side.
     pub fn create(path: &Path, stride: u32, height: u32) -> io::Result<Self> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)?;
+        let file = OpenOptions::new().read(true).write(true).create(true).truncate(true).open(path)?;
         let len = Self::file_len(stride, height);
         file.set_len(len as u64)?;
         Self::map(&file, stride, height)
@@ -97,17 +92,103 @@ impl FrameRing {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    /// A ring file removed when the test ends.
+    struct TempRing(PathBuf);
+
+    impl TempRing {
+        fn new(name: &str) -> Self {
+            Self(std::env::temp_dir().join(format!("backstage-ring-{name}-{}", std::process::id())))
+        }
+    }
+
+    impl Drop for TempRing {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
 
     #[test]
     fn write_then_read() {
-        let dir = std::env::temp_dir().join(format!("backstage-ring-test-{}", std::process::id()));
-        let mut writer = FrameRing::create(&dir, 8, 2).unwrap();
-        let reader = FrameRing::open(&dir, 8, 2).unwrap();
+        let tmp = TempRing::new("rw");
+        let mut writer = FrameRing::create(&tmp.0, 8, 2).unwrap();
+        let reader = FrameRing::open(&tmp.0, 8, 2).unwrap();
         writer.write(1, 7, &[42; 16]);
         assert_eq!(reader.read(1, 7).unwrap(), vec![42; 16]);
         assert!(reader.read(1, 8).is_none(), "stale seq must be rejected");
         writer.write(1, 9, &[1; 16]);
         assert!(reader.read(1, 7).is_none(), "overwritten slot must be rejected");
-        std::fs::remove_file(dir).unwrap();
+    }
+
+    #[test]
+    fn open_rejects_a_ring_that_is_too_small() {
+        let tmp = TempRing::new("small");
+        FrameRing::create(&tmp.0, 8, 2).unwrap();
+        assert!(FrameRing::open(&tmp.0, 8, 3).is_err());
+    }
+
+    #[test]
+    #[should_panic(expected = "out of range")]
+    fn slot_out_of_range_panics() {
+        let tmp = TempRing::new("range");
+        let mut ring = FrameRing::create(&tmp.0, 4, 1).unwrap();
+        ring.write(FRAME_SLOTS, 1, &[0; 4]);
+    }
+
+    #[test]
+    #[should_panic(expected = "seq 0")]
+    fn seq_zero_panics() {
+        let tmp = TempRing::new("seq0");
+        let mut ring = FrameRing::create(&tmp.0, 4, 1).unwrap();
+        ring.write(0, 0, &[0; 4]);
+    }
+
+    /// The writer laps the reader constantly. Every frame the reader accepts
+    /// must be exactly the one published under that seq, never a mix.
+    #[test]
+    fn concurrent_reader_never_sees_torn_frames() {
+        const STRIDE: u32 = 4096;
+        const HEIGHT: u32 = 64;
+        let tmp = TempRing::new("stress");
+        let mut writer = FrameRing::create(&tmp.0, STRIDE, HEIGHT).unwrap();
+        let reader = FrameRing::open(&tmp.0, STRIDE, HEIGHT).unwrap();
+        let latest = Arc::new(AtomicU64::new(0));
+        let done = Arc::new(AtomicBool::new(false));
+
+        let writer_thread = {
+            let latest = latest.clone();
+            let done = done.clone();
+            std::thread::spawn(move || {
+                let mut frame = vec![0u8; (STRIDE * HEIGHT) as usize];
+                for seq in 1..=3000u64 {
+                    frame.fill(seq as u8);
+                    writer.write((seq % FRAME_SLOTS as u64) as u32, seq, &frame);
+                    latest.store(seq, Ordering::Release);
+                }
+                done.store(true, Ordering::Release);
+            })
+        };
+
+        let (mut accepted, mut rejected) = (0u32, 0u32);
+        while !done.load(Ordering::Acquire) {
+            let seq = latest.load(Ordering::Acquire);
+            if seq == 0 {
+                continue;
+            }
+            // Reading an older seq makes collisions with the writer likely.
+            let seq = seq.saturating_sub(2).max(1);
+            match reader.read((seq % FRAME_SLOTS as u64) as u32, seq) {
+                Some(pixels) => {
+                    accepted += 1;
+                    assert!(pixels.iter().all(|&b| b == seq as u8), "torn frame for seq {seq}");
+                }
+                None => rejected += 1,
+            }
+        }
+        writer_thread.join().unwrap();
+        assert!(accepted > 0, "reader never accepted a frame ({rejected} rejected)");
     }
 }

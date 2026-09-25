@@ -92,6 +92,18 @@ compositor with `GtkGraphicsOffload` (GTK ≥ 4.14). The frame protocol keeps
 "which buffer is ready" separate from how pixels are transported, so C can
 replace B. **A** remains only as a possible debug mode.
 
+### Measured latency (option B, 2026-09-24)
+`latency_probe` (see [testing.md](../testing.md)) on the RX 6800 (RADV)
+measures from sending `Pointer` to a published frame showing the
+crosshair: **min 7.8 ms, median 16.6 ms, p95 17 ms**.
+- **Why it's about one frame:** the stage renders on a fixed 60 Hz tick, and
+  the probe sends right after a frame, so it always waits almost a full
+  tick. That makes the median the worst case, not the typical case.
+- **Not included:** the GTK texture upload and the compositor, which add
+  roughly 1–2 more display frames.
+- **Improvements, when drag feel needs it:** render as soon as input
+  arrives instead of waiting for the tick, then switch to zero-copy (C).
+
 ## Consequences
 - The tools process never links wgpu, the renderer, or the VM. It only
   speaks the protocol.

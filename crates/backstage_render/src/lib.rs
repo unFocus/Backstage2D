@@ -4,13 +4,20 @@
 //! grey pasteboard, some rotating quads, and a pointer crosshair). It always
 //! renders into a caller-provided `wgpu::TextureView`; see `docs/rendering.md`.
 
+mod offscreen;
+
+pub use offscreen::{Error, FALLBACK_ENV, HeadlessGpu, OFFSCREEN_FORMAT, OffscreenTarget};
+
 use bytemuck::{Pod, Zeroable};
 use std::f32::consts::TAU;
 
 /// Default Flash stage size, in stage units.
 pub const STAGE_SIZE: (f32, f32) = (550.0, 400.0);
 
-const PASTEBOARD: wgpu::Color = wgpu::Color { r: 0.23, g: 0.23, b: 0.25, a: 1.0 };
+/// Background around the stage.
+pub const PASTEBOARD: wgpu::Color = wgpu::Color { r: 0.23, g: 0.23, b: 0.25, a: 1.0 };
+/// Color of the pointer crosshair.
+pub const CROSSHAIR: [f32; 4] = [0.95, 0.15, 0.45, 1.0];
 
 /// Inputs for one frame of the test scene.
 pub struct TestScene {
@@ -156,10 +163,7 @@ impl Renderer {
                 view,
                 depth_slice: None,
                 resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(PASTEBOARD),
-                    store: wgpu::StoreOp::Store,
-                },
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(PASTEBOARD), store: wgpu::StoreOp::Store },
             })],
             ..Default::default()
         });
@@ -217,12 +221,70 @@ fn build_test_scene(size: (u32, u32), scene: &TestScene) -> Vec<Quad> {
     }
 
     if let Some((px, py)) = scene.pointer {
-        let (px, py) = (px * scene.scale, py * scene.scale);
+        // Snap to pixel centers so 1px lines cover whole pixels (crisp).
+        let (px, py) = ((px * scene.scale).floor() + 0.5, (py * scene.scale).floor() + 0.5);
         let arm = 14.0 * scene.scale;
         let thick = scene.scale.max(1.0);
-        let color = [0.95, 0.15, 0.45, 1.0];
+        let color = CROSSHAIR;
         quads.push(Quad { center: [px, py], half_size: [arm, thick / 2.0], angle: 0.0, color });
         quads.push(Quad { center: [px, py], half_size: [thick / 2.0, arm], angle: 0.0, color });
     }
     quads
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scene(scale: f32, pointer: Option<(f32, f32)>) -> TestScene {
+        TestScene { time: 1.0, scale, pointer }
+    }
+
+    /// The white stage quad (index 1, after the shadow).
+    fn stage_rect(quads: &[Quad]) -> ([f32; 2], [f32; 2]) {
+        let q = &quads[1];
+        assert_eq!(q.color, [1.0; 4]);
+        (q.center, q.half_size)
+    }
+
+    #[test]
+    fn stage_fits_inside_viewport_with_margin() {
+        for (size, scale) in [((800, 600), 1.0), ((300, 900), 2.0), ((1920, 400), 1.5)] {
+            let quads = build_test_scene(size, &scene(scale, None));
+            let (c, h) = stage_rect(&quads);
+            let margin = 24.0 * scale - 0.01;
+            assert!(c[0] - h[0] >= margin && c[0] + h[0] <= size.0 as f32 - margin, "{size:?}");
+            assert!(c[1] - h[1] >= margin && c[1] + h[1] <= size.1 as f32 - margin, "{size:?}");
+        }
+    }
+
+    #[test]
+    fn stage_never_upscales_past_scale() {
+        let quads = build_test_scene((8000, 8000), &scene(1.25, None));
+        let (_, h) = stage_rect(&quads);
+        assert!((h[0] * 2.0 - STAGE_SIZE.0 * 1.25).abs() < 0.01);
+        assert!((h[1] * 2.0 - STAGE_SIZE.1 * 1.25).abs() < 0.01);
+    }
+
+    #[test]
+    fn crosshair_only_with_pointer() {
+        let without = build_test_scene((800, 600), &scene(1.0, None));
+        let with = build_test_scene((800, 600), &scene(2.0, Some((10.0, 20.0))));
+        assert_eq!(with.len(), without.len() + 2);
+        for q in &with[with.len() - 2..] {
+            assert_eq!(q.color, CROSSHAIR);
+            // Logical (10, 20) at 2× is physical (20, 40), snapped to the pixel center.
+            assert_eq!(q.center, [20.5, 40.5]);
+        }
+    }
+
+    #[test]
+    fn degenerate_viewports_stay_finite() {
+        for size in [(0, 0), (1, 1), (10, 5000)] {
+            for q in build_test_scene(size, &scene(1.0, Some((0.0, 0.0)))) {
+                let values = q.center.iter().chain(&q.half_size).chain([&q.angle]);
+                assert!(values.into_iter().all(|v| v.is_finite()), "{size:?}");
+            }
+        }
+    }
 }

@@ -55,7 +55,11 @@ Runtime files (the socket and frame rings) live in
 `$XDG_RUNTIME_DIR/backstage2d/`. Files left by processes that died are
 cleaned up the next time the editor starts.
 
-## Crash-recovery checks
+## Checks
+`scripts/check.sh` runs formatting, clippy, all tests, and a headless UI
+smoke test. See [testing.md](testing.md).
+
+## Manual crash-recovery checks
 - **Kill Stage** button, or `pkill -9 -x backstage_stage`: the restart
   banner appears, then the stage comes back with a new pid.
 - `kill -STOP $(pgrep -x backstage_stage)`: after about 3 s the watchdog

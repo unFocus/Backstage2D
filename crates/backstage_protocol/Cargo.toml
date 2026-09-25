@@ -8,3 +8,7 @@ license.workspace = true
 memmap2.workspace = true
 postcard.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+proptest.workspace = true
