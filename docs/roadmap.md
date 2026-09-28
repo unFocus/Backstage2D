@@ -29,8 +29,8 @@ lands with tests in the tiers described in [testing.md](testing.md).
 The goal: a real project, animated over time and rendered with lyon, shown
 both in the editor's stage and in a standalone player window. The model is
 defined in [ADR 0003](adr/0003-document-model.md).
-- [ ] `Time` in flicks, typed IDs, and the `Project` / `Composition` / `Node` / `Animation` / `Track` / `Key` types
-- [ ] Project directory format (`name.bs2d/`, RON), with insta snapshot tests
+- [x] `Time` in flicks, typed IDs, and the `Project` / `Composition` / `Node` / `Animation` / `Track` / `Key` types, with validation
+- [x] Project directory format (`name.bs2d/`, RON), with the sample project `samples/bounce.bs2d/` as the format snapshot
 - [ ] `evaluate` for a single animation: easing, loop modes, step, nested synced and free instances
 - [ ] Mixer with crossfade blending
 - [ ] lyon tessellation with a mesh cache. Draws the evaluated scene instead of the test scene. MSAA. Pixel-art mode.

@@ -195,6 +195,26 @@ settled.
 - Format changes are caught by insta snapshots, the same way the protocol's
   wire format already is.
 
+### File encoding
+Conventions for `.ron` files, chosen for exactness and readable diffs:
+- **Times** are exact strings:
+  - `"2s"` and `"0.25s"` for decimal seconds
+  - `"7/24s"` and `"1/60s"` for common frame-rate fractions
+  - raw flicks otherwise, e.g. `"123f"`
+- **Colors** are `"#rrggbb"` or `"#rrggbbaa"`: 8-bit sRGB with straight
+  alpha.
+- **Angles** are degrees. **Coordinates** are stage pixels, with y pointing
+  down and the origin at the top left.
+- **IDs** are a kind prefix plus 13 characters of Crockford base32, e.g.
+  `node_0000002x12401`.
+- **Defaults are omitted:** identity transforms, opacity 1, linear easing,
+  and similar.
+- The `implicit_some` and `unwrap_variant_newtypes` RON extensions are
+  enabled in each file's header.
+- **Output is canonical:** the same project always produces the same bytes.
+- **Example:** `samples/bounce.bs2d/` in the repo is the reference sample
+  and doubles as the format snapshot.
+
 ### Sketch
 ```rust
 pub struct Project {

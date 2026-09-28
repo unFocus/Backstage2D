@@ -1,0 +1,22 @@
+#![enable(implicit_some)]
+#![enable(unwrap_variant_newtypes)]
+(
+    format_version: 1,
+    settings: (
+        stage_width: 550,
+        stage_height: 400,
+        background: "#ffffff",
+    ),
+    editor: (
+        time_grid: 60,
+        time_snap: true,
+        spatial_grid: 10.0,
+        spatial_snap: false,
+    ),
+    root: "comp_0000001bme001",
+    compositions: [
+        "comp_0000001bme001",
+        "comp_0000002rhe001",
+        "comp_0000002x12001",
+    ],
+)

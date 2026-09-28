@@ -1,0 +1,134 @@
+#![enable(implicit_some)]
+#![enable(unwrap_variant_newtypes)]
+(
+    id: "comp_0000002x12001",
+    name: "Ball",
+    root: "node_0000002x12400",
+    nodes: {
+        "node_0000002x12400": (
+            name: "ball",
+            kind: Group,
+            children: [
+                "node_0000002x12401",
+            ],
+        ),
+        "node_0000002x12401": (
+            name: "body",
+            kind: Shape(
+                paths: [
+                    (
+                        path: [
+                            MoveTo(30.0, 0.0),
+                            CubicTo((30.0, 16.568542), (16.568542, 30.0), (0.0, 30.0)),
+                            CubicTo((-16.568542, 30.0), (-30.0, 16.568542), (-30.0, 0.0)),
+                            CubicTo((-30.0, -16.568542), (-16.568542, -30.0), (0.0, -30.0)),
+                            CubicTo((16.568542, -30.0), (30.0, -16.568542), (30.0, 0.0)),
+                            Close,
+                        ],
+                        fill: RadialGradient(
+                            center: (-10.0, -10.0),
+                            radius: 40.0,
+                            stops: [
+                                (
+                                    offset: 0.0,
+                                    color: "#ffd080",
+                                ),
+                                (
+                                    offset: 1.0,
+                                    color: "#e86a10",
+                                ),
+                            ],
+                        ),
+                        stroke: (
+                            paint: Solid("#5a2a05"),
+                            width: 2.0,
+                        ),
+                    ),
+                ],
+            ),
+        ),
+    },
+    animations: {
+        "anim_0000002x12800": (
+            name: "bounce",
+            duration: "1s",
+            looping: Loop,
+            tracks: [
+                (
+                    node: "node_0000002x12401",
+                    property: Y,
+                    keys: [
+                        (
+                            at: "0s",
+                            value: Number(-180.0),
+                            ease: Preset(EaseIn),
+                        ),
+                        (
+                            at: "0.5s",
+                            value: Number(0.0),
+                            ease: Preset(EaseOut),
+                        ),
+                        (
+                            at: "1s",
+                            value: Number(-180.0),
+                        ),
+                    ],
+                ),
+            ],
+            markers: [
+                (
+                    name: "land",
+                    at: "0.5s",
+                ),
+            ],
+        ),
+        "anim_0000002x12801": (
+            name: "squash",
+            duration: "0.3s",
+            step: "1/30s",
+            tracks: [
+                (
+                    node: "node_0000002x12401",
+                    property: ScaleX,
+                    keys: [
+                        (
+                            at: "0s",
+                            value: Number(1.0),
+                            ease: Preset(EaseOut),
+                        ),
+                        (
+                            at: "0.1s",
+                            value: Number(1.3),
+                            ease: Preset(EaseInOut),
+                        ),
+                        (
+                            at: "0.3s",
+                            value: Number(1.0),
+                        ),
+                    ],
+                ),
+                (
+                    node: "node_0000002x12401",
+                    property: ScaleY,
+                    keys: [
+                        (
+                            at: "0s",
+                            value: Number(1.0),
+                            ease: Preset(EaseOut),
+                        ),
+                        (
+                            at: "0.1s",
+                            value: Number(0.7),
+                            ease: Preset(EaseInOut),
+                        ),
+                        (
+                            at: "0.3s",
+                            value: Number(1.0),
+                        ),
+                    ],
+                ),
+            ],
+        ),
+    },
+    default_animation: "anim_0000002x12800",
+)

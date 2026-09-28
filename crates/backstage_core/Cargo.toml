@@ -5,3 +5,11 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+getrandom.workspace = true
+glam.workspace = true
+ron.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

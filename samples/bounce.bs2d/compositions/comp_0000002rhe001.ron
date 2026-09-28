@@ -1,0 +1,116 @@
+#![enable(implicit_some)]
+#![enable(unwrap_variant_newtypes)]
+(
+    id: "comp_0000002rhe001",
+    name: "Blinker",
+    root: "node_0000002rhe400",
+    nodes: {
+        "node_0000002rhe400": (
+            name: "blinker",
+            kind: Group,
+            children: [
+                "node_0000002rhe401",
+            ],
+        ),
+        "node_0000002rhe401": (
+            name: "eye",
+            kind: Flipbook([
+                (
+                    id: "draw_0000002rhec00",
+                    shape: (
+                        paths: [
+                            (
+                                path: [
+                                    MoveTo(12.0, 0.0),
+                                    CubicTo((12.0, 8.836556), (6.6274176, 16.0), (0.0, 16.0)),
+                                    CubicTo((-6.6274176, 16.0), (-12.0, 8.836556), (-12.0, 0.0)),
+                                    CubicTo((-12.0, -8.836556), (-6.6274176, -16.0), (0.0, -16.0)),
+                                    CubicTo((6.6274176, -16.0), (12.0, -8.836556), (12.0, 0.0)),
+                                    Close,
+                                ],
+                                fill: Solid("#000000"),
+                            ),
+                        ],
+                    ),
+                ),
+                (
+                    id: "draw_0000002rhec01",
+                    shape: (
+                        paths: [
+                            (
+                                path: [
+                                    MoveTo(12.0, 0.0),
+                                    CubicTo((12.0, 4.418278), (6.6274176, 8.0), (0.0, 8.0)),
+                                    CubicTo((-6.6274176, 8.0), (-12.0, 4.418278), (-12.0, 0.0)),
+                                    CubicTo((-12.0, -4.418278), (-6.6274176, -8.0), (0.0, -8.0)),
+                                    CubicTo((6.6274176, -8.0), (12.0, -4.418278), (12.0, 0.0)),
+                                    Close,
+                                ],
+                                fill: Solid("#000000"),
+                            ),
+                        ],
+                    ),
+                ),
+                (
+                    id: "draw_0000002rhec02",
+                    shape: (
+                        paths: [
+                            (
+                                path: [
+                                    MoveTo(12.0, 0.0),
+                                    CubicTo((12.0, 0.8284272), (6.6274176, 1.5), (0.0, 1.5)),
+                                    CubicTo((-6.6274176, 1.5), (-12.0, 0.8284272), (-12.0, 0.0)),
+                                    CubicTo((-12.0, -0.8284272), (-6.6274176, -1.5), (0.0, -1.5)),
+                                    CubicTo((6.6274176, -1.5), (12.0, -0.8284272), (12.0, 0.0)),
+                                    Close,
+                                ],
+                                fill: Solid("#000000"),
+                            ),
+                        ],
+                    ),
+                ),
+            ]),
+        ),
+    },
+    animations: {
+        "anim_0000002rhe800": (
+            name: "blink",
+            duration: "2s",
+            looping: Loop,
+            tracks: [
+                (
+                    node: "node_0000002rhe401",
+                    property: Drawing,
+                    keys: [
+                        (
+                            at: "0s",
+                            value: Index(0),
+                            ease: Hold,
+                        ),
+                        (
+                            at: "1.5s",
+                            value: Index(1),
+                            ease: Hold,
+                        ),
+                        (
+                            at: "38/24s",
+                            value: Index(2),
+                            ease: Hold,
+                        ),
+                        (
+                            at: "40/24s",
+                            value: Index(1),
+                            ease: Hold,
+                        ),
+                        (
+                            at: "1.75s",
+                            value: Index(0),
+                            ease: Hold,
+                        ),
+                    ],
+                ),
+            ],
+        ),
+    },
+    default_animation: "anim_0000002rhe800",
+)

@@ -15,6 +15,10 @@ backstage_render = { path = "crates/backstage_render" }
 backstage_script = { path = "crates/backstage_script" }
 
 anyhow = "1.0.104"
+getrandom = "0.4.3"
+glam = { version = "0.33.11", features = ["serde"] }
+ron = "0.12.2"
+thiserror = "2.0.21"
 bytemuck = { version = "1.25", features = ["derive"] }
 memmap2 = "0.9.11"
 pollster = "1.0.1"

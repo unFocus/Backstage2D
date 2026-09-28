@@ -84,3 +84,9 @@ fn runtime_crates_never_link_the_gui() {
 fn tools_never_links_gpu_or_vm() {
     assert_excludes(&Graph::load(), "backstage_tools", &["wgpu", "backstage_render", "backstage_script"]);
 }
+
+#[test]
+fn core_is_pure_data() {
+    // The document model is shared by every process and must stay headless.
+    assert_excludes(&Graph::load(), "backstage_core", &["wgpu", "gtk4", "relm4", "lyon", "winit"]);
+}

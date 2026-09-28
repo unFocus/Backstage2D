@@ -20,6 +20,7 @@ host. Tests need **no GPU and no display**:
 | Unit | `#[cfg(test)]` in each crate | Protocol round-trips (proptest), garbage input never panics, frame-ring seqlock stress test, scene layout math, `StageHealth` crash/hang policy, argument and file-name parsing |
 | Integration | `crates/backstage_stage/tests/`, `crates/backstage_tools/tests/supervisor.rs` | The real stage binary driven over the real protocol (handshake, frames, resize, shutdown, disconnect, version mismatch, pointer). The real `Supervisor` spawning, killing, restarting, and cleaning up stages. |
 | Regression: golden images | `crates/backstage_render/tests/golden.rs`, `tests/golden/*.png` | Pixel output of the renderer on lavapipe |
+| Regression: project format | `samples/bounce.bs2d/` + `sample_matches_checked_in_files` in `backstage_core` | The on-disk project format, byte for byte |
 | Regression: wire format | `crates/backstage_protocol/src/snapshots/` (insta) | Byte encoding of every protocol message |
 | Regression: architecture | `crates/backstage_tools/tests/dependency_boundaries.rs` | Runtime crates never link GTK/Relm4. The tools crate never links wgpu, the renderer, or the VM. |
 | UI smoke | `crates/backstage_tools/tests/ui_smoke.rs` (ignored by default) | The real editor in headless cage: frames arrive, the stage is killed, it restarts, and frames arrive again |
@@ -36,6 +37,13 @@ host. Tests need **no GPU and no display**:
   small on purpose: a 1 px line moving changes only about 100 pixels.
   Goldens are tied to lavapipe, so after a Mesa upgrade, review the diffs
   and re-bless.
+- **Project format (sample project):** `samples/bounce.bs2d/` is
+  `backstage_core::sample::bounce()` saved to disk. When a format change is
+  intended, re-bless it and review the diff of the `.ron` files:
+  ```sh
+  BACKSTAGE_BLESS=1 cargo test -p backstage_core sample_matches
+  ```
+  A format change that breaks old files also needs a `FORMAT_VERSION` bump.
 - **Wire-format snapshot:** a diff here means old and new processes can no
   longer talk. Bump `PROTOCOL_VERSION`, then accept the new snapshot:
   ```sh
