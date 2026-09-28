@@ -36,6 +36,32 @@ spans, and no mutable display list.
 - **Crossfade** comes first. Blend spaces, additive layers, and state
   machines follow.
 
+## Evaluation rules
+Implemented in `backstage_core::eval`.
+- **Clocks:**
+  - The root composition and **free** instances run on the global clock,
+    minus their player's start time (0 if there's no player).
+  - **Synced** instances run on their **parent's local animation time**
+    plus `offset`. The parent's time is already looped or ping-ponged, so
+    nested loops line up with the parent's loop, as Flash Graphics did.
+- **Local time:** the loop mode (or the instance's `repeat`) maps the clock
+  into `0..=duration`. Then `step` quantizes it. All of this is exact
+  integer math on flicks.
+- **Keys:** before the first key, the first value applies; after the last,
+  the last. In between, the earlier key's ease applies. Discrete
+  properties hold.
+- **Transform order:** `T(position) · R(rotation) · Skew · S(scale) ·
+  T(−pivot)`. Angles are degrees, and positive rotation is clockwise
+  (y is down). The world transform is `parent · local`.
+- **Inheritance:**
+  - Opacity multiplies down the tree.
+  - Color transforms apply the child's first, then the parent's.
+  - An invisible node hides its whole subtree.
+- **Painter's order:** depth-first, in child order. An instance's content
+  draws before the instance node's own children.
+- **Not yet:** masks (skipped for now), blending of several animations
+  (next), and script overrides.
+
 ## The scene
 - `evaluate(project, runtime_state, now)` produces the scene to draw. It's a
   pure function, so scrubbing, seeking, and rewinding are free.

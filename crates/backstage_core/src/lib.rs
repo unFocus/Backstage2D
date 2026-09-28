@@ -5,6 +5,7 @@
 //! `docs/architecture.md`.
 
 pub mod animation;
+pub mod eval;
 pub mod geom;
 pub mod id;
 pub mod io;
@@ -16,6 +17,7 @@ pub mod time;
 pub mod validate;
 
 pub use animation::{Animation, Ease, EasePreset, Key, LoopMode, Marker, Property, Track, Value, ValueKind};
+pub use eval::{DrawContent, DrawItem, InstancePath, Player, RuntimeState, Scene, evaluate, evaluate_from};
 pub use geom::{Color, ColorTransform, Transform, Vec2};
 pub use id::{AnimId, AssetId, CompId, DrawingId, NodeId, ParseIdError};
 pub use io::{LoadError, SaveError, load, save};

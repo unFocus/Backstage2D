@@ -31,7 +31,7 @@ both in the editor's stage and in a standalone player window. The model is
 defined in [ADR 0003](adr/0003-document-model.md).
 - [x] `Time` in flicks, typed IDs, and the `Project` / `Composition` / `Node` / `Animation` / `Track` / `Key` types, with validation
 - [x] Project directory format (`name.bs2d/`, RON), with the sample project `samples/bounce.bs2d/` as the format snapshot
-- [ ] `evaluate` for a single animation: easing, loop modes, step, nested synced and free instances
+- [x] `evaluate` for a single animation: easing, loop modes, step, nested synced and free instances (`scene_dump` example prints a scene)
 - [ ] Mixer with crossfade blending
 - [ ] lyon tessellation with a mesh cache. Draws the evaluated scene instead of the test scene. MSAA. Pixel-art mode.
 - [ ] Sample project (in the repo) and golden images of it
