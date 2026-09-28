@@ -39,29 +39,29 @@ Rules:
 7. User scripts never run in the editing stage. They run in the player
    process (Test Movie).
 
-## Core data model (sketch)
-
-- `Document`: the library (symbols, bitmaps, sounds, fonts), root timeline,
-  stage size, frame rate.
-- `Symbol`: `MovieClip | Graphic | Button`. Each owns a `Timeline`.
-- `Timeline`: ordered `Layer`s. Each layer holds `Keyframe` spans.
-- `Keyframe`: a list of placed `Instance`s, plus tweens to the next keyframe.
-- `Instance`: a symbol reference, transform, color transform, filters, blend
-  mode, and an optional name for scripts.
-- `DisplayObject` (runtime): an instance that is alive on stage, with
-  playhead state for its nested timeline.
-
-The *document* (authored and immutable during playback) is kept separate from
-the *runtime display list* (mutable, script-owned). Flash mixed the two, and
-that caused many of its bugs.
+## Core data model
+Defined in [ADR 0003](adr/0003-document-model.md):
+- A **Project** holds a library of **Compositions** and assets.
+- Each composition has a fixed **node tree** and named **animations** that
+  key node properties over time. Times are in flicks, not frames.
+- At runtime, `evaluate(&Project, &RuntimeState, now) -> Scene` produces a
+  flat list of draw items. The renderer, hit testing, and the editor's
+  on-stage tools all consume it.
+- The runtime state (mixers, free-running clocks, script overrides) is small,
+  data-oriented, and serializable.
 
 ## Frame loop (player / stage)
+Runs at the display's refresh rate (optionally capped). Nothing in the
+document depends on it.
 
 1. Handle input and dispatch events.
-2. Run scripts (enter-frame, frame scripts).
-3. Advance playheads and apply timeline changes to the display list.
-4. Build the render list (flatten transforms, cull).
+2. Advance the clocks by the real elapsed time: free-running instances,
+   mixers, and crossfades.
+3. Run scripts (M6). They write overrides and runtime state, never the
+   document.
+4. `evaluate` the scene at the new time: flattened transforms, culling.
 5. Submit to wgpu.
 
-Open question: fixed-rate timeline ticks with interpolated rendering, or
-variable rate? Leaning fixed-rate for determinism.
+Game logic may later run on a fixed tick (for example 30 or 60 Hz) with
+rendering interpolated in between. That choice belongs to scripting (M6).
+Animation playback is already exact, because it is sampled from time.

@@ -1,7 +1,7 @@
 # Scripting
 
 Goal: a small language designed for timeline-driven interactive content.
-Frame scripts, event handlers, and object behaviors should be easy to write,
+Marker scripts, event handlers, and object behaviors should be easy to write,
 typed enough to give good editor tooling, and hot-reloadable.
 
 ## Options
@@ -11,7 +11,7 @@ typed enough to give good editor tooling, and hot-reloadable.
 | **Custom language + bytecode VM** | Designed for timeline and display list concepts. We control semantics, debugging, and serialization of VM state. | Largest effort: parser, type checker, VM, LSP. |
 | **Rhai** | Pure Rust, easy to embed, sandboxed. | Dynamic typing. Slower. Tooling is limited. |
 | **Lua (mlua / Luau)** | Proven, fast, well known. Luau adds gradual types. | C dependency. Semantics don't match ours. |
-| **WASM guest modules** | Any source language, sandboxed, fast. | Heavy iteration loop. Awkward for small frame scripts. |
+| **WASM guest modules** | Any source language, sandboxed, fast. | Heavy iteration loop. Awkward for small marker scripts. |
 
 ## Proposed path
 1. Define the **host API** first (display list, timeline control, events,
@@ -23,7 +23,7 @@ typed enough to give good editor tooling, and hot-reloadable.
 ## Custom language sketch (strawman)
 - Expression-oriented, statically typed with inference, and no nulls
   (`Option`).
-- First-class `on` handlers: `on enter_frame { ... }`, `on click(btn) { ... }`.
-- Coroutines/`await` over frames: `await frames(10)`, `await tween(...)`.
+- First-class `on` handlers: `on update(dt) { ... }`, `on marker("land") { ... }`, `on click(btn) { ... }`.
+- Coroutines/`await` over time: `await seconds(0.5)`, `await tween(...)`, `await marker("land")`.
 - Compiles to a register-based bytecode. VM state is serializable, so saving
   and rewinding work.

@@ -26,15 +26,16 @@ lands with tests in the tiers described in [testing.md](testing.md).
 ## Next
 
 ### M1: first real content *(next)*
-The goal: a real document, animated by the timeline and rendered with lyon,
-shown both in the editor's stage and in a standalone player window.
-- [ ] `backstage_core` document model: `Document`, `Symbol` (MovieClip / Graphic / Button), `Timeline`, `Layer`, `Keyframe`, `Instance`, shapes (paths, fills, strokes)
-- [ ] Text document format (RON) with insta snapshot tests
-- [ ] Timeline evaluation: a pure function from document + frame to a list of what to draw (transforms, color transforms, depth)
-- [ ] Motion tweens with easing, and nested MovieClip playheads
-- [ ] lyon tessellation with a mesh cache. Draws the evaluated list instead of the test scene. MSAA.
-- [ ] Golden images of a sample document
-- [ ] `backstage_player`: winit + wgpu window that plays a document file
+The goal: a real project, animated over time and rendered with lyon, shown
+both in the editor's stage and in a standalone player window. The model is
+defined in [ADR 0003](adr/0003-document-model.md).
+- [ ] `Time` in flicks, typed IDs, and the `Project` / `Composition` / `Node` / `Animation` / `Track` / `Key` types
+- [ ] Project directory format (`name.bs2d/`, RON), with insta snapshot tests
+- [ ] `evaluate` for a single animation: easing, loop modes, step, nested synced and free instances
+- [ ] Mixer with crossfade blending
+- [ ] lyon tessellation with a mesh cache. Draws the evaluated scene instead of the test scene. MSAA. Pixel-art mode.
+- [ ] Sample project (in the repo) and golden images of it
+- [ ] `backstage_player`: a winit + wgpu window that plays a project
 
 ### M2: edit commands and crash recovery with no lost work
 - [ ] `Command` type in core with apply and undo. Undo/redo log.
@@ -45,12 +46,12 @@ shown both in the editor's stage and in a standalone player window.
 - [ ] Bump `PROTOCOL_VERSION`
 
 ### M3: editor panels on real data
-- [ ] Timeline widget built from the editor's copy of the document; scrubbing moves the stage's playhead
+- [ ] Timeline widget: one animation at a time, a row per node, and an animation picker. Scrubbing moves the stage's playhead. Time grid snapping.
 - [ ] Library, properties, and layers panels
 - [ ] Open and save files
 
 ### M4: on-stage editing
-- [ ] Hit testing, selection, bounding boxes, transform handles, all drawn by the engine
+- [ ] Hit testing, selection, bounding boxes, transform handles, all drawn by the engine. Spatial grid snapping.
 - [ ] Drag gestures become commands. Undo works across them.
 - [ ] Render as soon as input arrives instead of on the fixed tick. Measure with the latency probe.
 
@@ -60,7 +61,8 @@ shown both in the editor's stage and in a standalone player window.
 ### M6: scripting
 - [ ] The engine API scripts will call ([scripting.md](scripting.md))
 - [ ] Prototype binding (Rhai or Luau)
-- [ ] Frame scripts and events, running in the player only
+- [ ] Scripts and events (markers, input), running in the player only
+- [ ] State machines and blend spaces (Rive-style), if not needed earlier
 
 ## Later
 - Zero-copy stage frames (DMA-BUF import with `GdkDmabufTexture` and `GtkGraphicsOffload`)

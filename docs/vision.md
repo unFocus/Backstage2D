@@ -5,11 +5,14 @@ A Flash Pro–style authoring tool and runtime for 2D vector animation and
 interactive content, built in Rust on wgpu.
 
 ## What we keep from Flash
-- **Stage + timeline** as the main way to author. Time is the primary axis.
-- **Symbols**: reusable MovieClips, Graphics, and Buttons, each with its own
-  nested timeline.
-- **Display list**: a retained tree of display objects. Scripts and the
-  timeline both change it.
+- **Stage + timeline** as the main way to author. Time (in seconds, not
+  frames) is the primary axis.
+- **Reusable animated units**: Flash's symbols (MovieClip, Graphic, Button)
+  become **Compositions** with named animations that can be blended
+  ([ADR 0003](adr/0003-document-model.md)).
+- **A tree of objects** that users and scripts navigate. Underneath, it's
+  evaluated from the document at each moment, not a mutable display list
+  (ADR 0003).
 - **Vector-first art**: shapes, strokes, gradients, and tweens between them.
 - **A standalone player**: published content runs without the editor.
 
