@@ -1,10 +1,15 @@
 # Backstage2D
 
+[![CI](https://github.com/unFocus/Backstage2D/actions/workflows/ci.yml/badge.svg)](https://github.com/unFocus/Backstage2D/actions/workflows/ci.yml)
+
 A 2D animation and interactive-content engine in Rust. It borrows the Flash Pro
 model (stage, timeline, symbols, display list) and updates it with modern
 ideas. Rendering goes through wgpu.
 
-Status: pre-alpha, planning stage. Start with [`docs/`](docs/README.md).
+Status: pre-alpha. The editor mockup runs, with a live stage process;
+see the [roadmap](docs/roadmap.md). The original 2012 AS3 Backstage2D is
+preserved on the [`archive`](https://github.com/unFocus/Backstage2D/tree/archive)
+branch. Start with [`docs/`](docs/README.md).
 
 ## Layout
 

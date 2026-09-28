@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: scripts/check.sh
+    runs-on: ubuntu-latest
+    # Fedora 44 matches the dev host (Bazzite 44): same GTK 4, cage, and Mesa
+    # lavapipe, so golden images rendered on lavapipe match. See docs/testing.md.
+    container: fedora:44
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+      XDG_RUNTIME_DIR: /tmp/xdg-runtime
+    steps:
+      - name: Install system packages
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            git gcc pkgconf-pkg-config gtk4-devel \
+            mesa-vulkan-drivers vulkan-loader cage xorg-x11-server-Xwayland
+          mkdir -m 0700 -p "$XDG_RUNTIME_DIR"
+
+      - uses: actions/checkout@v7
+
+      - name: Install Rust (toolchain from rust-toolchain.toml)
+        run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Show environment
+        run: |
+          rustc --version
+          pkg-config --modversion gtk4
+          cage -v
+
+      - name: Run all checks
+        run: scripts/check.sh
+
+      - name: Upload golden-image failures
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: golden-failures
+          path: target/golden-failures/
+          if-no-files-found: ignore

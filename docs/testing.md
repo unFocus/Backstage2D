@@ -59,6 +59,12 @@ set.
   itself if `cage` is missing.
 - GTK 4 dev files, as described in [dev-setup.md](dev-setup.md).
 
-## CI (later)
-Once the repo has a remote, run `scripts/check.sh` on a Linux runner with
-Mesa (lavapipe), GTK 4 dev packages, and cage installed.
+## CI
+`.github/workflows/ci.yml` runs `scripts/check.sh` on every push to `main`,
+on pull requests, and on demand.
+- **Environment:** a `fedora:44` container, to match the dev host's GTK,
+  cage, and Mesa lavapipe.
+- **On failure:** golden-image diffs are uploaded as the `golden-failures`
+  artifact.
+- **If lavapipe output differs between CI and local:** re-bless from CI's
+  `*.actual.png` files, after reviewing them.
