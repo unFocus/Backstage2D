@@ -5,6 +5,7 @@
 //! `docs/architecture.md`.
 
 pub mod animation;
+pub mod command;
 pub mod eval;
 pub mod geom;
 pub mod id;
@@ -17,6 +18,7 @@ pub mod time;
 pub mod validate;
 
 pub use animation::{Animation, Ease, EasePreset, Key, LoopMode, Marker, Property, Track, Value, ValueKind};
+pub use command::{Command, CommandError};
 pub use eval::{
     DrawContent, DrawItem, InstancePath, Layer, Mixer, RuntimeState, Scene, Weight, evaluate, evaluate_from,
 };

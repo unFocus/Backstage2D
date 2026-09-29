@@ -1,5 +1,5 @@
-//! Structural checks on a project. `load` runs them; edit commands (M2) will
-//! keep them true.
+//! Structural checks on a project. `load` runs them, and edit commands
+//! ([`Command`](crate::Command)) check them after every change.
 
 use crate::animation::{Property, Value, ValueKind};
 use crate::id::{AnimId, AssetId, CompId, NodeId};
@@ -82,6 +82,21 @@ impl Project {
             if key != comp.id {
                 errors.push(ValidationError::CompositionIdMismatch { key, id: comp.id });
             }
+            check_tree(comp, &mut errors);
+            check_nodes(self, comp, &mut errors);
+            check_animations(comp, &mut errors);
+        }
+        check_recursion(self, &mut errors);
+        if errors.is_empty() { Ok(()) } else { Err(errors) }
+    }
+
+    /// Like [`validate`](Self::validate), but only checks one composition
+    /// (plus composition recursion, which any composition can introduce).
+    /// Commands use it after each change: they only touch one composition,
+    /// and the rest of the project was already valid.
+    pub(crate) fn validate_composition(&self, id: CompId) -> Result<(), Vec<ValidationError>> {
+        let mut errors = Vec::new();
+        if let Some(comp) = self.compositions.get(&id) {
             check_tree(comp, &mut errors);
             check_nodes(self, comp, &mut errors);
             check_animations(comp, &mut errors);

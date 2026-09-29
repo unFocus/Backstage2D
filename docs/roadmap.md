@@ -38,7 +38,8 @@ defined in [ADR 0003](adr/0003-document-model.md).
 - [x] `backstage_player`: a winit + wgpu window that plays a project (Space pauses, F fullscreen)
 
 ### M2: edit commands and crash recovery with no lost work *(next)*
-- [ ] `Command` type in core with apply and undo. Undo/redo log.
+- [x] `Command` type in core: apply returns the inverse, failures change nothing, results stay valid
+- [ ] Undo/redo log (`Document`: project + history + sequence number)
 - [ ] Protocol: document snapshot on connect, edit commands in both directions
 - [ ] The stage is the only writer: it applies each command, numbers it, and sends it out
 - [ ] The editor keeps a copy of the document and autosaves the command log
