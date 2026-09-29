@@ -90,15 +90,39 @@ fn write_atomic(path: &Path, contents: &str) -> Result<(), SaveError> {
     fs::rename(&tmp, path).map_err(io_err)
 }
 
+/// The project's files as `(path relative to the project directory,
+/// contents)`, in a fixed order with `project.ron` last. The bytes are
+/// canonical: equal projects give equal files.
+pub fn to_files(project: &Project) -> Result<Vec<(PathBuf, String)>, SaveError> {
+    let mut files = Vec::with_capacity(project.compositions.len() + 1);
+    for comp in project.compositions.values() {
+        files.push((composition_file(Path::new(""), comp.id), to_ron(comp, &comp.id.to_string())?));
+    }
+    let file = ProjectFile {
+        format_version: FORMAT_VERSION,
+        settings: project.settings,
+        editor: project.editor,
+        root: project.root,
+        compositions: project.compositions.keys().copied().collect(),
+        assets: project.assets.clone(),
+    };
+    files.push((PathBuf::from(PROJECT_FILE), to_ron(&file, PROJECT_FILE)?));
+    Ok(files)
+}
+
 /// Saves `project` into `dir` (created if needed). Composition files that
 /// are no longer in the project are removed. Does not validate; callers
 /// should only save valid projects.
 pub fn save(project: &Project, dir: &Path) -> Result<(), SaveError> {
+    let files = to_files(project)?;
     let comps_dir = dir.join(COMPOSITIONS_DIR);
     fs::create_dir_all(&comps_dir).map_err(|source| SaveError::Io { path: comps_dir.clone(), source })?;
 
-    for comp in project.compositions.values() {
-        write_atomic(&composition_file(dir, comp.id), &to_ron(comp, &comp.id.to_string())?)?;
+    // `project.ron` comes last, so a crash mid-save leaves the old one
+    // pointing at complete composition files.
+    let (project_file, comp_files) = files.split_last().expect("project.ron is always there");
+    for (path, text) in comp_files {
+        write_atomic(&dir.join(path), text)?;
     }
     let entries =
         fs::read_dir(&comps_dir).map_err(|source| SaveError::Io { path: comps_dir.clone(), source })?;
@@ -114,18 +138,28 @@ pub fn save(project: &Project, dir: &Path) -> Result<(), SaveError> {
             fs::remove_file(&path).map_err(|source| SaveError::Io { path, source })?;
         }
     }
+    write_atomic(&dir.join(&project_file.0), &project_file.1)
+}
 
-    let file = ProjectFile {
-        format_version: FORMAT_VERSION,
-        settings: project.settings,
-        editor: project.editor,
-        root: project.root,
-        compositions: project.compositions.keys().copied().collect(),
-        assets: project.assets.clone(),
-    };
-    // Written last: a crash mid-save leaves the old project.ron pointing at
-    // complete composition files.
-    write_atomic(&dir.join(PROJECT_FILE), &to_ron(&file, PROJECT_FILE)?)
+/// One value as a single line of RON, in the same dialect as project files
+/// (implicit `Some`, unwrapped newtype variants) but without the header.
+/// Used for the command log, one entry per line.
+pub fn to_ron_line<T: Serialize>(value: &T) -> Result<String, SaveError> {
+    ron_options().to_string(value).map_err(|e| SaveError::Serialize {
+        what: std::any::type_name::<T>().to_owned(),
+        message: e.to_string(),
+    })
+}
+
+/// Parses a line written by [`to_ron_line`].
+pub fn from_ron_line<T: for<'de> Deserialize<'de>>(line: &str) -> Result<T, ron::error::SpannedError> {
+    ron_options().from_str(line)
+}
+
+fn ron_options() -> ron::Options {
+    ron::Options::default().with_default_extension(
+        ron::extensions::Extensions::IMPLICIT_SOME | ron::extensions::Extensions::UNWRAP_VARIANT_NEWTYPES,
+    )
 }
 
 fn read(path: &Path) -> Result<String, LoadError> {
@@ -211,6 +245,21 @@ mod tests {
             first.iter().all(|(p, _)| p.extension().is_some_and(|e| e == "ron")),
             "temp files left: {first:?}"
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn to_files_is_what_save_writes() {
+        let dir = tempdir("to-files");
+        let project = sample::bounce();
+        save(&project, &dir).unwrap();
+        let mut expected: Vec<_> = to_files(&project)
+            .unwrap()
+            .into_iter()
+            .map(|(p, text)| (dir.join(p), text.into_bytes()))
+            .collect();
+        expected.sort();
+        assert_eq!(files(&dir), expected);
         fs::remove_dir_all(dir).unwrap();
     }
 
