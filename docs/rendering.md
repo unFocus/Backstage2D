@@ -15,9 +15,14 @@
 - **Color:** authored sRGB, blended in sRGB space (like Flash and the CSS
   default). Straight alpha.
 - **Anti-aliasing:** 4× MSAA, resolved into the caller's texture view.
-- **Framing:** the project's stage size, fitted into the viewport with a
-  margin, a drop shadow, and the background color. The pointer crosshair is
-  drawn on top as an engine-side editor overlay (ADR 0002).
+- **Framing** (`Presentation`):
+  - **Editor:** the project's stage, fitted into the viewport with a margin,
+    a drop shadow, and the background color. It's never enlarged past 1
+    stage unit per logical pixel. The pointer crosshair is drawn on top as
+    an engine-side editor overlay (ADR 0002).
+  - **Player:** the stage fills the window, keeping its aspect ratio,
+    between black bars. In pixel-art mode it scales by whole numbers once
+    the window is big enough.
 - **Pixel-art mode:** item translations are rounded to whole physical
   pixels.
 - **Not yet:**

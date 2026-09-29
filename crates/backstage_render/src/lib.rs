@@ -9,7 +9,7 @@
 mod offscreen;
 pub mod tessellate;
 
-pub use offscreen::{Error, FALLBACK_ENV, HeadlessGpu, OFFSCREEN_FORMAT, OffscreenTarget};
+pub use offscreen::{Error, FALLBACK_ENV, HeadlessGpu, OFFSCREEN_FORMAT, OffscreenTarget, adapter_options};
 
 use backstage_core::{DrawContent, Project, Scene, Shape};
 use bytemuck::{Pod, Zeroable};
@@ -17,8 +17,10 @@ use glam::{Affine2, Vec2};
 use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 
-/// Background around the stage.
+/// Background around the stage in the editor.
 pub const PASTEBOARD: wgpu::Color = wgpu::Color { r: 0.23, g: 0.23, b: 0.25, a: 1.0 };
+/// Bars around the stage in the player.
+pub const LETTERBOX: wgpu::Color = wgpu::Color::BLACK;
 /// Color of the pointer crosshair.
 pub const CROSSHAIR: [f32; 4] = [0.95, 0.15, 0.45, 1.0];
 /// Multisample count for anti-aliasing.
@@ -34,6 +36,18 @@ pub struct Frame<'a> {
     pub scale: f32,
     /// Pointer position in logical pixels, if over the stage section.
     pub pointer: Option<(f32, f32)>,
+    pub presentation: Presentation,
+}
+
+/// How the stage is framed in the viewport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Presentation {
+    /// The editor's stage section: pasteboard, margin, shadow, and the
+    /// pointer crosshair; never enlarged past 1 stage unit per logical pixel.
+    Editor,
+    /// The player: the stage fills the window (keeping its aspect ratio)
+    /// between black bars, with no shadow or crosshair.
+    Player,
 }
 
 /// Where the stage sits in the viewport.
@@ -45,12 +59,32 @@ pub struct Framing {
     pub stage_size: Vec2,
 }
 
-/// Fits a `stage` of stage units into a `viewport` of physical pixels with
-/// a margin, centered, never enlarging beyond 1 stage unit per logical pixel.
-pub fn frame_stage(viewport: (u32, u32), stage: (f32, f32), scale: f32) -> Framing {
+/// Fits a `stage` of stage units into a `viewport` of physical pixels,
+/// centered.
+/// - `Editor`: with a margin, never enlarging beyond 1 stage unit per
+///   logical pixel.
+/// - `Player`: as large as fits. In pixel-art mode the scale is rounded down
+///   to a whole number once the viewport is at least as big as the stage,
+///   so stage pixels stay square.
+pub fn frame_stage(
+    viewport: (u32, u32),
+    stage: (f32, f32),
+    scale: f32,
+    presentation: Presentation,
+    pixel_art: bool,
+) -> Framing {
     let (vw, vh) = (viewport.0 as f32, viewport.1 as f32);
-    let margin = STAGE_MARGIN * scale;
-    let fit = ((vw - 2.0 * margin) / stage.0).min((vh - 2.0 * margin) / stage.1).min(scale).max(0.01);
+    let fit = match presentation {
+        Presentation::Editor => {
+            let margin = STAGE_MARGIN * scale;
+            ((vw - 2.0 * margin) / stage.0).min((vh - 2.0 * margin) / stage.1).min(scale)
+        }
+        Presentation::Player => {
+            let fit = (vw / stage.0).min(vh / stage.1);
+            if pixel_art && fit >= 1.0 { fit.floor() } else { fit }
+        }
+    }
+    .max(0.01);
     let size = Vec2::new(stage.0, stage.1) * fit;
     let origin = (Vec2::new(vw, vh) - size) / 2.0;
     Framing {
@@ -342,8 +376,13 @@ impl Renderer {
             self.cache_owner = owner;
         }
         let settings = &frame.project.settings;
-        let framing =
-            frame_stage(size, (settings.stage_width as f32, settings.stage_height as f32), frame.scale);
+        let framing = frame_stage(
+            size,
+            (settings.stage_width as f32, settings.stage_height as f32),
+            frame.scale,
+            frame.presentation,
+            settings.pixel_art,
+        );
 
         // Background quads (shadow, stage), then items, then the crosshair.
         let (quads, under) = overlay_quads(&framing, frame, settings.background);
@@ -386,7 +425,10 @@ impl Renderer {
                 depth_slice: None,
                 resolve_target: Some(view),
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(PASTEBOARD),
+                    load: wgpu::LoadOp::Clear(match frame.presentation {
+                        Presentation::Editor => PASTEBOARD,
+                        Presentation::Player => LETTERBOX,
+                    }),
                     store: wgpu::StoreOp::Discard,
                 },
             })],
@@ -423,29 +465,31 @@ impl Renderer {
     }
 }
 
-/// The stage's shadow and background (drawn under the items), followed by
-/// the pointer crosshair (drawn over them). Returns the quads and how many
-/// go under.
+/// The stage's background (and, in the editor, its shadow), drawn under the
+/// items, followed by the editor's pointer crosshair, drawn over them.
+/// Returns the quads and how many go under.
 fn overlay_quads(framing: &Framing, frame: &Frame, background: backstage_core::Color) -> (Vec<Quad>, u32) {
     let scale = frame.scale;
+    let editor = frame.presentation == Presentation::Editor;
     let center = framing.view.translation + framing.stage_size / 2.0;
     let half = (framing.stage_size / 2.0).to_array();
-    let mut quads = vec![
-        Quad {
+    let mut quads = Vec::new();
+    if editor {
+        quads.push(Quad {
             center: (center + Vec2::splat(4.0 * scale)).to_array(),
             half_size: half,
             angle: 0.0,
             color: [0.0, 0.0, 0.0, 0.35],
-        },
-        Quad {
-            center: center.to_array(),
-            half_size: half,
-            angle: 0.0,
-            color: [background.r, background.g, background.b, background.a],
-        },
-    ];
+        });
+    }
+    quads.push(Quad {
+        center: center.to_array(),
+        half_size: half,
+        angle: 0.0,
+        color: [background.r, background.g, background.b, background.a],
+    });
     let under = quads.len() as u32;
-    if let Some((px, py)) = frame.pointer {
+    if let Some((px, py)) = frame.pointer.filter(|_| editor) {
         // Snap to pixel centers so 1px lines cover whole pixels (crisp).
         let (px, py) = ((px * scale).floor() + 0.5, (py * scale).floor() + 0.5);
         let arm = 14.0 * scale;
@@ -496,7 +540,7 @@ mod tests {
     #[test]
     fn stage_fits_inside_viewport_with_margin() {
         for (size, scale) in [((800, 600), 1.0), ((300, 900), 2.0), ((1920, 400), 1.5)] {
-            let f = frame_stage(size, (550.0, 400.0), scale);
+            let f = frame_stage(size, (550.0, 400.0), scale, Presentation::Editor, false);
             let (lo, hi) = (f.view.translation, f.view.translation + f.stage_size);
             let margin = STAGE_MARGIN * scale - 0.01;
             assert!(lo.x >= margin && hi.x <= size.0 as f32 - margin, "{size:?}");
@@ -506,7 +550,7 @@ mod tests {
 
     #[test]
     fn stage_never_upscales_past_scale() {
-        let f = frame_stage((8000, 8000), (550.0, 400.0), 1.25);
+        let f = frame_stage((8000, 8000), (550.0, 400.0), 1.25, Presentation::Editor, false);
         assert!((f.stage_size - Vec2::new(550.0, 400.0) * 1.25).length() < 0.01);
         assert_eq!(f.view.transform_point2(Vec2::ZERO), f.view.translation);
     }
@@ -514,7 +558,7 @@ mod tests {
     #[test]
     fn degenerate_viewports_stay_finite() {
         for size in [(0, 0), (1, 1), (10, 5000)] {
-            let f = frame_stage(size, (550.0, 400.0), 1.0);
+            let f = frame_stage(size, (550.0, 400.0), 1.0, Presentation::Editor, false);
             assert!(f.view.translation.is_finite() && f.stage_size.is_finite(), "{size:?}");
         }
     }
@@ -534,6 +578,27 @@ mod tests {
             field(&s.opacity),
         ];
         assert_eq!(offsets, expected);
+    }
+
+    #[test]
+    fn player_fills_the_window_keeping_aspect() {
+        // Wider window: bars left and right.
+        let f = frame_stage((1100, 400), (550.0, 400.0), 1.0, Presentation::Player, false);
+        assert_eq!(f.stage_size, Vec2::new(550.0, 400.0));
+        assert_eq!(f.view.translation, Vec2::new(275.0, 0.0));
+        // Taller window, enlarged: bars top and bottom.
+        let f = frame_stage((1100, 1600), (550.0, 400.0), 1.0, Presentation::Player, false);
+        assert_eq!(f.stage_size, Vec2::new(1100.0, 800.0));
+        assert_eq!(f.view.translation, Vec2::new(0.0, 400.0));
+    }
+
+    #[test]
+    fn pixel_art_player_uses_whole_number_scales() {
+        let f = frame_stage((1000, 700), (320.0, 180.0), 1.0, Presentation::Player, true);
+        assert_eq!(f.stage_size, Vec2::new(960.0, 540.0), "3×, not 3.125×");
+        // Smaller than the stage: scale down smoothly rather than to 0×.
+        let f = frame_stage((160, 90), (320.0, 180.0), 1.0, Presentation::Player, true);
+        assert_eq!(f.stage_size, Vec2::new(160.0, 90.0));
     }
 
     #[test]

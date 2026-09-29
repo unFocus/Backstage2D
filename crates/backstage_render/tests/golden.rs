@@ -6,7 +6,9 @@
 //! and a diff are written to `target/golden-failures/`.
 
 use backstage_core::{RuntimeState, Time, evaluate, sample};
-use backstage_render::{FALLBACK_ENV, Frame, HeadlessGpu, OFFSCREEN_FORMAT, OffscreenTarget, Renderer};
+use backstage_render::{
+    FALLBACK_ENV, Frame, HeadlessGpu, OFFSCREEN_FORMAT, OffscreenTarget, Presentation, Renderer,
+};
 use image::{Rgba, RgbaImage};
 use std::path::{Path, PathBuf};
 
@@ -20,6 +22,16 @@ const MAX_BAD_PIXELS: usize = 16;
 
 /// Renders the sample at `at` into a `size` image.
 fn render(size: (u32, u32), at: Time, scale: f32, pointer: Option<(f32, f32)>) -> RgbaImage {
+    render_as(Presentation::Editor, size, at, scale, pointer)
+}
+
+fn render_as(
+    presentation: Presentation,
+    size: (u32, u32),
+    at: Time,
+    scale: f32,
+    pointer: Option<(f32, f32)>,
+) -> RgbaImage {
     // SAFETY: set before any threads of ours read the environment.
     unsafe { std::env::set_var(FALLBACK_ENV, "1") };
     let gpu = pollster::block_on(HeadlessGpu::new("golden test")).expect("software adapter (lavapipe)");
@@ -27,7 +39,7 @@ fn render(size: (u32, u32), at: Time, scale: f32, pointer: Option<(f32, f32)>) -
     let mut target = OffscreenTarget::new(&gpu.device, size);
     let project = sample::bounce();
     let scene = evaluate(&project, &RuntimeState::default(), at);
-    let frame = Frame { project: &project, scene: &scene, scale, pointer };
+    let frame = Frame { project: &project, scene: &scene, scale, pointer, presentation };
     let stride = target.stride() as usize;
     let mut image = RgbaImage::new(size.0, size.1);
     target
@@ -105,4 +117,13 @@ fn sample_blink() {
 #[test]
 fn tiny_viewport() {
     check("tiny_64x64", render((64, 64), Time::ZERO, 1.0, None));
+}
+
+#[test]
+fn sample_in_the_player() {
+    // Stage fills the window between black bars; no shadow, no crosshair.
+    check(
+        "sample_player_t0_800x600",
+        render_as(Presentation::Player, (800, 600), Time::ZERO, 1.0, Some((10.0, 10.0))),
+    );
 }

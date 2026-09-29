@@ -26,6 +26,8 @@ pollster = "1.0.1"
 postcard = { version = "1.1.3", features = ["use-std"] }
 serde = { version = "1.0.229", features = ["derive"] }
 wgpu = "30.0.1"
+# Wayland only on Linux (docs/platforms.md): no X11 backend.
+winit = { version = "0.30.13", default-features = false, features = ["wayland", "wayland-dlopen", "wayland-csd-adwaita", "rwh_06"] }
 
 # Test-only.
 image = { version = "0.25.10", default-features = false, features = ["png"] }

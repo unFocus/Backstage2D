@@ -22,7 +22,8 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 step "cargo test"
 cargo test --workspace --locked
 
-step "UI smoke test (headless cage)"
+step "UI smoke tests (headless cage): editor and player"
 cargo test -p backstage_tools --test ui_smoke --locked -- --ignored
+cargo test -p backstage_player --test player_smoke --locked -- --ignored
 
 step "all checks passed"

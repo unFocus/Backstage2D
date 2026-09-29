@@ -14,6 +14,19 @@ pub const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unor
 /// Tests always set it so they run without a GPU and render deterministically.
 pub const FALLBACK_ENV: &str = "BACKSTAGE_WGPU_FALLBACK";
 
+/// Adapter selection shared by every process: the high-performance GPU, or
+/// the software fallback when `BACKSTAGE_WGPU_FALLBACK=1`.
+pub fn adapter_options<'a, 'w>(
+    surface: Option<&'a wgpu::Surface<'w>>,
+) -> wgpu::RequestAdapterOptions<'a, 'w> {
+    wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        force_fallback_adapter: std::env::var(FALLBACK_ENV).is_ok_and(|v| v == "1"),
+        compatible_surface: surface,
+        ..Default::default()
+    }
+}
+
 pub struct HeadlessGpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -23,15 +36,8 @@ pub struct HeadlessGpu {
 
 impl HeadlessGpu {
     pub async fn new(label: &str) -> Result<Self, Error> {
-        let fallback = std::env::var(FALLBACK_ENV).is_ok_and(|v| v == "1");
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                force_fallback_adapter: fallback,
-                ..Default::default()
-            })
-            .await?;
+        let adapter = instance.request_adapter(&adapter_options(None)).await?;
         let info = adapter.get_info();
         let adapter_name = format!("{} ({:?})", info.name, info.backend);
         let (device, queue) = adapter

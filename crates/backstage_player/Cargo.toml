@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 backstage_core.workspace = true
 backstage_render.workspace = true
-backstage_script.workspace = true
+pollster.workspace = true
+wgpu.workspace = true
+winit.workspace = true

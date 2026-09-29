@@ -10,7 +10,7 @@ use backstage_core::{Project, RuntimeState, Time, evaluate};
 use backstage_protocol::{
     FRAME_SLOTS, FrameRing, PROTOCOL_VERSION, ToStage, ToTools, read_message, write_message,
 };
-use backstage_render::{Frame, HeadlessGpu, OFFSCREEN_FORMAT, OffscreenTarget, Renderer};
+use backstage_render::{Frame, HeadlessGpu, OFFSCREEN_FORMAT, OffscreenTarget, Presentation, Renderer};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -112,7 +112,13 @@ fn run() -> Result<()> {
         if let Some(t) = target.as_mut() {
             let now = Time::from_ratio(started.elapsed().as_nanos() as i64, 1_000_000_000);
             let scene = evaluate(&project, &state, now);
-            let frame = Frame { project: &project, scene: &scene, scale: scale as f32, pointer };
+            let frame = Frame {
+                project: &project,
+                scene: &scene,
+                scale: scale as f32,
+                pointer,
+                presentation: Presentation::Editor,
+            };
             seq += 1;
             let slot = (seq % FRAME_SLOTS as u64) as u32;
             t.render_into_ring(&gpu, &mut renderer, &frame, slot, seq)?;

@@ -23,6 +23,7 @@ host. Tests need **no GPU and no display**:
 | Regression: project format | `samples/bounce.bs2d/` + `sample_matches_checked_in_files` in `backstage_core` | The on-disk project format, byte for byte |
 | Regression: wire format | `crates/backstage_protocol/src/snapshots/` (insta) | Byte encoding of every protocol message |
 | Regression: architecture | `crates/backstage_tools/tests/dependency_boundaries.rs` | Runtime crates never link GTK/Relm4. The tools crate never links wgpu, the renderer, or the VM. |
+| Player smoke | `crates/backstage_player/tests/player_smoke.rs` (ignored by default) | The player opens a Wayland window in headless cage and presents 30 frames |
 | UI smoke | `crates/backstage_tools/tests/ui_smoke.rs` (ignored by default) | The real editor in headless cage: frames arrive, the stage is killed, it restarts, and frames arrive again |
 | Probe | `latency_probe` in `stage_protocol.rs` (ignored) | Pointer → published frame latency (prints numbers, asserts nothing) |
 
@@ -56,6 +57,7 @@ host. Tests need **no GPU and no display**:
 cargo test -p backstage_protocol                     # fast, pure
 cargo test -p backstage_stage                        # real stage process
 cargo test -p backstage_tools --test ui_smoke -- --ignored
+cargo test -p backstage_player --test player_smoke -- --ignored
 cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture latency
 ```
 The latency probe uses the real GPU unless `BACKSTAGE_WGPU_FALLBACK=1` is

@@ -25,7 +25,7 @@ lands with tests in the tiers described in [testing.md](testing.md).
 
 ## Next
 
-### M1: first real content *(next)*
+### M1: first real content *(done)*
 The goal: a real project, animated over time and rendered with lyon, shown
 both in the editor's stage and in a standalone player window. The model is
 defined in [ADR 0003](adr/0003-document-model.md).
@@ -35,9 +35,9 @@ defined in [ADR 0003](adr/0003-document-model.md).
 - [x] Mixer with crossfade blending (`scene_dump --crossfade squash@1s/0.2s` shows it)
 - [x] lyon tessellation with a mesh cache. Draws the evaluated scene instead of the test scene. MSAA. Pixel-art mode.
 - [x] Sample project (in the repo) and golden images of it
-- [ ] `backstage_player`: a winit + wgpu window that plays a project
+- [x] `backstage_player`: a winit + wgpu window that plays a project (Space pauses, F fullscreen)
 
-### M2: edit commands and crash recovery with no lost work
+### M2: edit commands and crash recovery with no lost work *(next)*
 - [ ] `Command` type in core with apply and undo. Undo/redo log.
 - [ ] Protocol: document snapshot on connect, edit commands in both directions
 - [ ] The stage is the only writer: it applies each command, numbers it, and sends it out
