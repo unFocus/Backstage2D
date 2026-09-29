@@ -1,32 +1,69 @@
-//! Backstage2D renderer: turns a display list into wgpu draw calls.
+//! Backstage2D renderer: draws an evaluated [`Scene`] with wgpu.
 //!
-//! For now it draws a hard-coded test scene (a Flash-style white stage on a
-//! grey pasteboard, some rotating quads, and a pointer crosshair). It always
-//! renders into a caller-provided `wgpu::TextureView`; see `docs/rendering.md`.
+//! Shapes are tessellated with lyon once and cached; each item is drawn with
+//! its world transform, opacity, and color transform. Gradients are evaluated
+//! per fragment. Colors are authored sRGB and blended in sRGB space (like
+//! Flash and CSS). Output is 4× MSAA, resolved into a caller-provided
+//! `wgpu::TextureView`. See `docs/rendering.md`.
 
 mod offscreen;
+pub mod tessellate;
 
 pub use offscreen::{Error, FALLBACK_ENV, HeadlessGpu, OFFSCREEN_FORMAT, OffscreenTarget};
 
+use backstage_core::{DrawContent, Project, Scene, Shape};
 use bytemuck::{Pod, Zeroable};
-use std::f32::consts::TAU;
-
-/// Default Flash stage size, in stage units.
-pub const STAGE_SIZE: (f32, f32) = (550.0, 400.0);
+use glam::{Affine2, Vec2};
+use std::collections::HashMap;
+use wgpu::util::DeviceExt;
 
 /// Background around the stage.
 pub const PASTEBOARD: wgpu::Color = wgpu::Color { r: 0.23, g: 0.23, b: 0.25, a: 1.0 };
 /// Color of the pointer crosshair.
 pub const CROSSHAIR: [f32; 4] = [0.95, 0.15, 0.45, 1.0];
+/// Multisample count for anti-aliasing.
+pub const SAMPLE_COUNT: u32 = 4;
+/// Gap between the stage and the viewport edge, in logical pixels.
+const STAGE_MARGIN: f32 = 24.0;
 
-/// Inputs for one frame of the test scene.
-pub struct TestScene {
-    /// Seconds since the stage started.
-    pub time: f32,
+/// Everything needed to draw one frame.
+pub struct Frame<'a> {
+    pub project: &'a Project,
+    pub scene: &'a Scene<'a>,
     /// Physical pixels per logical pixel.
     pub scale: f32,
     /// Pointer position in logical pixels, if over the stage section.
     pub pointer: Option<(f32, f32)>,
+}
+
+/// Where the stage sits in the viewport.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Framing {
+    /// Stage coordinates → physical pixels.
+    pub view: Affine2,
+    /// Stage size in physical pixels.
+    pub stage_size: Vec2,
+}
+
+/// Fits a `stage` of stage units into a `viewport` of physical pixels with
+/// a margin, centered, never enlarging beyond 1 stage unit per logical pixel.
+pub fn frame_stage(viewport: (u32, u32), stage: (f32, f32), scale: f32) -> Framing {
+    let (vw, vh) = (viewport.0 as f32, viewport.1 as f32);
+    let margin = STAGE_MARGIN * scale;
+    let fit = ((vw - 2.0 * margin) / stage.0).min((vh - 2.0 * margin) / stage.1).min(scale).max(0.01);
+    let size = Vec2::new(stage.0, stage.1) * fit;
+    let origin = (Vec2::new(vw, vh) - size) / 2.0;
+    Framing {
+        view: Affine2::from_translation(origin) * Affine2::from_scale(Vec2::splat(fit)),
+        stage_size: size,
+    }
+}
+
+/// Pixel-art mode: moves an item to whole physical pixels. Only the
+/// translation changes, so rotation and scale stay exact.
+pub fn snap_to_pixels(mut m: Affine2) -> Affine2 {
+    m.translation = m.translation.round();
+    m
 }
 
 #[repr(C)]
@@ -36,7 +73,8 @@ struct Globals {
     _pad: [f32; 2],
 }
 
-/// One rotated, solid-colored rectangle, in physical pixels.
+/// A rotated solid rectangle in physical pixels (`quads.wgsl`), used for
+/// the stage background, its shadow, and the pointer crosshair.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Quad {
@@ -46,27 +84,56 @@ struct Quad {
     color: [f32; 4],
 }
 
+/// Per-item instance data (`scene.wgsl` locations 2..=7). Field order must
+/// match the attribute list: `vertex_attr_array!` packs attributes back to
+/// back, so any padding must come last.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct ItemInstance {
+    m0: [f32; 2],
+    m1: [f32; 2],
+    m2: [f32; 2],
+    multiply: [f32; 4],
+    add: [f32; 4],
+    opacity: f32,
+    _pad: f32,
+}
+
+const ITEM_ATTRIBUTES: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+    2 => Float32x2, 3 => Float32x2, 4 => Float32x2, 5 => Float32x4, 6 => Float32x4, 7 => Float32
+];
+
+struct GpuMesh {
+    vertices: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    index_count: u32,
+    paints: wgpu::BindGroup,
+}
+
 pub struct Renderer {
-    pipeline: wgpu::RenderPipeline,
+    format: wgpu::TextureFormat,
+    quad_pipeline: wgpu::RenderPipeline,
+    scene_pipeline: wgpu::RenderPipeline,
     globals: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
-    instances: wgpu::Buffer,
-    instance_capacity: usize,
+    globals_bind_group: wgpu::BindGroup,
+    paints_layout: wgpu::BindGroupLayout,
+    quads: GrowBuffer,
+    items: GrowBuffer,
+    /// Tessellated shapes, keyed by the shape's address in `cache_owner`.
+    meshes: HashMap<usize, GpuMesh>,
+    cache_owner: usize,
+    msaa: Option<((u32, u32), wgpu::TextureView)>,
 }
 
 impl Renderer {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("quads"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("quads.wgsl").into()),
-        });
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("globals"),
             size: size_of::<Globals>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let globals_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("globals"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -79,21 +146,46 @@ impl Renderer {
                 count: None,
             }],
         });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let globals_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("globals"),
-            layout: &bind_group_layout,
+            layout: &globals_layout,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: globals.as_entire_binding() }],
         });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let paints_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("paints"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let target = [Some(wgpu::ColorTargetState {
+            format,
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write_mask: wgpu::ColorWrites::ALL,
+        })];
+        let multisample = wgpu::MultisampleState { count: SAMPLE_COUNT, ..Default::default() };
+
+        let quad_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("quads"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
+            source: wgpu::ShaderSource::Wgsl(include_str!("quads.wgsl").into()),
+        });
+        let quad_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("quads"),
+            bind_group_layouts: &[Some(&globals_layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let quad_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("quads"),
-            layout: Some(&layout),
+            layout: Some(&quad_layout),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: &quad_shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[Some(wgpu::VertexBufferLayout {
@@ -106,36 +198,133 @@ impl Renderer {
             },
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
+            multisample,
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module: &quad_shader,
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: &target,
             }),
             multiview_mask: None,
             cache: None,
         });
-        let instance_capacity = 64;
-        let instances = Self::instance_buffer(device, instance_capacity);
-        Self { pipeline, globals, bind_group, instances, instance_capacity }
+
+        let scene_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("scene"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("scene.wgsl").into()),
+        });
+        let scene_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("scene"),
+            bind_group_layouts: &[Some(&globals_layout), Some(&paints_layout)],
+            immediate_size: 0,
+        });
+        let scene_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("scene"),
+            layout: Some(&scene_layout),
+            vertex: wgpu::VertexState {
+                module: &scene_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: size_of::<tessellate::Vertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Uint32],
+                    }),
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: size_of::<ItemInstance>() as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &ITEM_ATTRIBUTES,
+                    }),
+                ],
+            },
+            // Tessellated winding isn't guaranteed; never cull.
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample,
+            fragment: Some(wgpu::FragmentState {
+                module: &scene_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &target,
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        Self {
+            format,
+            quad_pipeline,
+            scene_pipeline,
+            globals,
+            globals_bind_group,
+            paints_layout,
+            quads: GrowBuffer::new("quad instances"),
+            items: GrowBuffer::new("item instances"),
+            meshes: HashMap::new(),
+            cache_owner: 0,
+            msaa: None,
+        }
     }
 
-    fn instance_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("quad instances"),
-            size: (capacity * size_of::<Quad>()) as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        })
+    /// Forgets all cached meshes. Call when the project is replaced or its
+    /// shapes are edited.
+    pub fn clear_cache(&mut self) {
+        self.meshes.clear();
     }
 
-    /// Records the test scene into `encoder`, targeting `view` of `size`
-    /// physical pixels.
+    fn mesh_for(&mut self, device: &wgpu::Device, shape: &Shape) -> Option<&GpuMesh> {
+        let key = shape as *const Shape as usize;
+        if !self.meshes.contains_key(&key) {
+            let mesh = tessellate::tessellate(shape);
+            if mesh.indices.is_empty() || mesh.paints.is_empty() {
+                return None;
+            }
+            let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("mesh vertices"),
+                contents: bytemuck::cast_slice(&mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("mesh indices"),
+                contents: bytemuck::cast_slice(&mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+            let paint_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("mesh paints"),
+                contents: bytemuck::cast_slice(&mesh.paints),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+            let paints = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("mesh paints"),
+                layout: &self.paints_layout,
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: paint_buffer.as_entire_binding() }],
+            });
+            let gpu = GpuMesh { vertices, indices, index_count: mesh.indices.len() as u32, paints };
+            self.meshes.insert(key, gpu);
+        }
+        self.meshes.get(&key)
+    }
+
+    fn msaa_view(&mut self, device: &wgpu::Device, size: (u32, u32)) -> wgpu::TextureView {
+        if self.msaa.as_ref().is_none_or(|(s, _)| *s != size) {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("msaa target"),
+                size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: SAMPLE_COUNT,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            self.msaa = Some((size, texture.create_view(&Default::default())));
+        }
+        self.msaa.as_ref().unwrap().1.clone()
+    }
+
+    /// Records `frame` into `encoder`, resolving into `view` (`size` physical
+    /// pixels, single-sampled, in the renderer's format).
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -143,148 +332,215 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         size: (u32, u32),
-        scene: &TestScene,
+        frame: &Frame,
     ) {
-        let quads = build_test_scene(size, scene);
-        if quads.len() > self.instance_capacity {
-            self.instance_capacity = quads.len().next_power_of_two();
-            self.instances = Self::instance_buffer(device, self.instance_capacity);
+        // Meshes are keyed by shape address, which is only meaningful for
+        // the project that owns them.
+        let owner = frame.project as *const Project as usize;
+        if owner != self.cache_owner {
+            self.clear_cache();
+            self.cache_owner = owner;
         }
+        let settings = &frame.project.settings;
+        let framing =
+            frame_stage(size, (settings.stage_width as f32, settings.stage_height as f32), frame.scale);
+
+        // Background quads (shadow, stage), then items, then the crosshair.
+        let (quads, under) = overlay_quads(&framing, frame, settings.background);
+        let mut instances = Vec::with_capacity(frame.scene.items.len());
+        let mut draws = Vec::with_capacity(frame.scene.items.len());
+        for item in &frame.scene.items {
+            let DrawContent::Shape(shape) = item.content else { continue }; // Bitmaps: not yet.
+            if self.mesh_for(device, shape).is_none() {
+                continue;
+            }
+            let mut m = framing.view * item.transform;
+            if settings.pixel_art {
+                m = snap_to_pixels(m);
+            }
+            draws.push((shape as *const Shape as usize, instances.len() as u32));
+            instances.push(ItemInstance {
+                m0: m.matrix2.x_axis.to_array(),
+                m1: m.matrix2.y_axis.to_array(),
+                m2: m.translation.to_array(),
+                multiply: item.color.multiply,
+                add: item.color.add,
+                opacity: item.opacity,
+                _pad: 0.0,
+            });
+        }
+
         queue.write_buffer(
             &self.globals,
             0,
             bytemuck::bytes_of(&Globals { viewport: [size.0 as f32, size.1 as f32], _pad: [0.0; 2] }),
         );
-        queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(&quads));
+        self.quads.write(device, queue, bytemuck::cast_slice(&quads), wgpu::BufferUsages::VERTEX);
+        self.items.write(device, queue, bytemuck::cast_slice(&instances), wgpu::BufferUsages::VERTEX);
+        let msaa = self.msaa_view(device, size);
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("test scene"),
+            label: Some("stage"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
+                view: &msaa,
                 depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(PASTEBOARD), store: wgpu::StoreOp::Store },
+                resolve_target: Some(view),
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(PASTEBOARD),
+                    store: wgpu::StoreOp::Discard,
+                },
             })],
             ..Default::default()
         });
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
-        pass.set_vertex_buffer(0, self.instances.slice(..));
-        pass.draw(0..6, 0..quads.len() as u32);
+        pass.set_bind_group(0, &self.globals_bind_group, &[]);
+
+        let quad_buffer = self.quads.buffer();
+        pass.set_pipeline(&self.quad_pipeline);
+        if let Some(buffer) = quad_buffer {
+            pass.set_vertex_buffer(0, buffer.slice(..));
+            pass.draw(0..6, 0..under);
+        }
+
+        if let Some(item_buffer) = self.items.buffer() {
+            pass.set_pipeline(&self.scene_pipeline);
+            pass.set_vertex_buffer(1, item_buffer.slice(..));
+            for (key, instance) in &draws {
+                let mesh = &self.meshes[key];
+                pass.set_bind_group(1, &mesh.paints, &[]);
+                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..mesh.index_count, 0, *instance..*instance + 1);
+            }
+        }
+
+        if let Some(buffer) = quad_buffer
+            && quads.len() as u32 > under
+        {
+            pass.set_pipeline(&self.quad_pipeline);
+            pass.set_vertex_buffer(0, buffer.slice(..));
+            pass.draw(0..6, under..quads.len() as u32);
+        }
     }
 }
 
-fn build_test_scene(size: (u32, u32), scene: &TestScene) -> Vec<Quad> {
-    let (vw, vh) = (size.0 as f32, size.1 as f32);
-    let (sw, sh) = STAGE_SIZE;
-    // Fit the stage into the viewport with a margin, never upscaling past 1:1
-    // logical pixels.
-    let margin = 24.0 * scene.scale;
-    let fit = ((vw - 2.0 * margin) / sw).min((vh - 2.0 * margin) / sh).min(scene.scale).max(0.01);
-    let origin = [(vw - sw * fit) / 2.0, (vh - sh * fit) / 2.0];
-    let to_px = |x: f32, y: f32| [origin[0] + x * fit, origin[1] + y * fit];
-
+/// The stage's shadow and background (drawn under the items), followed by
+/// the pointer crosshair (drawn over them). Returns the quads and how many
+/// go under.
+fn overlay_quads(framing: &Framing, frame: &Frame, background: backstage_core::Color) -> (Vec<Quad>, u32) {
+    let scale = frame.scale;
+    let center = framing.view.translation + framing.stage_size / 2.0;
+    let half = (framing.stage_size / 2.0).to_array();
     let mut quads = vec![
-        // Drop shadow, then the white stage.
         Quad {
-            center: [vw / 2.0 + 4.0 * scene.scale, vh / 2.0 + 4.0 * scene.scale],
-            half_size: [sw * fit / 2.0, sh * fit / 2.0],
+            center: (center + Vec2::splat(4.0 * scale)).to_array(),
+            half_size: half,
             angle: 0.0,
             color: [0.0, 0.0, 0.0, 0.35],
         },
         Quad {
-            center: [vw / 2.0, vh / 2.0],
-            half_size: [sw * fit / 2.0, sh * fit / 2.0],
+            center: center.to_array(),
+            half_size: half,
             angle: 0.0,
-            color: [1.0, 1.0, 1.0, 1.0],
+            color: [background.r, background.g, background.b, background.a],
         },
     ];
-
-    let palette = [
-        [0.91, 0.30, 0.24, 1.0],
-        [0.95, 0.61, 0.07, 1.0],
-        [0.18, 0.80, 0.44, 1.0],
-        [0.20, 0.60, 0.86, 1.0],
-        [0.61, 0.35, 0.71, 1.0],
-    ];
-    for (i, color) in palette.iter().enumerate() {
-        let phase = i as f32 / palette.len() as f32 * TAU;
-        let t = scene.time * 0.6 + phase;
-        let (x, y) = (sw / 2.0 + t.cos() * 150.0, sh / 2.0 + (t * 2.0).sin() * 110.0);
-        let half = 22.0 + 8.0 * (scene.time * 2.0 + phase).sin();
-        quads.push(Quad {
-            center: to_px(x, y),
-            half_size: [half * fit, half * fit],
-            angle: scene.time * (1.0 + i as f32 * 0.3),
-            color: *color,
-        });
-    }
-
-    if let Some((px, py)) = scene.pointer {
+    let under = quads.len() as u32;
+    if let Some((px, py)) = frame.pointer {
         // Snap to pixel centers so 1px lines cover whole pixels (crisp).
-        let (px, py) = ((px * scene.scale).floor() + 0.5, (py * scene.scale).floor() + 0.5);
-        let arm = 14.0 * scene.scale;
-        let thick = scene.scale.max(1.0);
-        let color = CROSSHAIR;
-        quads.push(Quad { center: [px, py], half_size: [arm, thick / 2.0], angle: 0.0, color });
-        quads.push(Quad { center: [px, py], half_size: [thick / 2.0, arm], angle: 0.0, color });
+        let (px, py) = ((px * scale).floor() + 0.5, (py * scale).floor() + 0.5);
+        let arm = 14.0 * scale;
+        let thick = scale.max(1.0);
+        quads.push(Quad { center: [px, py], half_size: [arm, thick / 2.0], angle: 0.0, color: CROSSHAIR });
+        quads.push(Quad { center: [px, py], half_size: [thick / 2.0, arm], angle: 0.0, color: CROSSHAIR });
     }
-    quads
+    (quads, under)
+}
+
+/// A GPU buffer that grows (never shrinks) to fit what's written.
+struct GrowBuffer {
+    label: &'static str,
+    buffer: Option<wgpu::Buffer>,
+    used: u64,
+}
+
+impl GrowBuffer {
+    fn new(label: &'static str) -> Self {
+        Self { label, buffer: None, used: 0 }
+    }
+
+    fn write(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, bytes: &[u8], usage: wgpu::BufferUsages) {
+        self.used = bytes.len() as u64;
+        if bytes.is_empty() {
+            return;
+        }
+        if self.buffer.as_ref().is_none_or(|b| b.size() < self.used) {
+            self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(self.label),
+                size: self.used.next_power_of_two().max(256),
+                usage: usage | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        queue.write_buffer(self.buffer.as_ref().unwrap(), 0, bytes);
+    }
+
+    fn buffer(&self) -> Option<&wgpu::Buffer> {
+        self.buffer.as_ref().filter(|_| self.used > 0)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn scene(scale: f32, pointer: Option<(f32, f32)>) -> TestScene {
-        TestScene { time: 1.0, scale, pointer }
-    }
-
-    /// The white stage quad (index 1, after the shadow).
-    fn stage_rect(quads: &[Quad]) -> ([f32; 2], [f32; 2]) {
-        let q = &quads[1];
-        assert_eq!(q.color, [1.0; 4]);
-        (q.center, q.half_size)
-    }
-
     #[test]
     fn stage_fits_inside_viewport_with_margin() {
         for (size, scale) in [((800, 600), 1.0), ((300, 900), 2.0), ((1920, 400), 1.5)] {
-            let quads = build_test_scene(size, &scene(scale, None));
-            let (c, h) = stage_rect(&quads);
-            let margin = 24.0 * scale - 0.01;
-            assert!(c[0] - h[0] >= margin && c[0] + h[0] <= size.0 as f32 - margin, "{size:?}");
-            assert!(c[1] - h[1] >= margin && c[1] + h[1] <= size.1 as f32 - margin, "{size:?}");
+            let f = frame_stage(size, (550.0, 400.0), scale);
+            let (lo, hi) = (f.view.translation, f.view.translation + f.stage_size);
+            let margin = STAGE_MARGIN * scale - 0.01;
+            assert!(lo.x >= margin && hi.x <= size.0 as f32 - margin, "{size:?}");
+            assert!(lo.y >= margin && hi.y <= size.1 as f32 - margin, "{size:?}");
         }
     }
 
     #[test]
     fn stage_never_upscales_past_scale() {
-        let quads = build_test_scene((8000, 8000), &scene(1.25, None));
-        let (_, h) = stage_rect(&quads);
-        assert!((h[0] * 2.0 - STAGE_SIZE.0 * 1.25).abs() < 0.01);
-        assert!((h[1] * 2.0 - STAGE_SIZE.1 * 1.25).abs() < 0.01);
-    }
-
-    #[test]
-    fn crosshair_only_with_pointer() {
-        let without = build_test_scene((800, 600), &scene(1.0, None));
-        let with = build_test_scene((800, 600), &scene(2.0, Some((10.0, 20.0))));
-        assert_eq!(with.len(), without.len() + 2);
-        for q in &with[with.len() - 2..] {
-            assert_eq!(q.color, CROSSHAIR);
-            // Logical (10, 20) at 2× is physical (20, 40), snapped to the pixel center.
-            assert_eq!(q.center, [20.5, 40.5]);
-        }
+        let f = frame_stage((8000, 8000), (550.0, 400.0), 1.25);
+        assert!((f.stage_size - Vec2::new(550.0, 400.0) * 1.25).length() < 0.01);
+        assert_eq!(f.view.transform_point2(Vec2::ZERO), f.view.translation);
     }
 
     #[test]
     fn degenerate_viewports_stay_finite() {
         for size in [(0, 0), (1, 1), (10, 5000)] {
-            for q in build_test_scene(size, &scene(1.0, Some((0.0, 0.0)))) {
-                let values = q.center.iter().chain(&q.half_size).chain([&q.angle]);
-                assert!(values.into_iter().all(|v| v.is_finite()), "{size:?}");
-            }
+            let f = frame_stage(size, (550.0, 400.0), 1.0);
+            assert!(f.view.translation.is_finite() && f.stage_size.is_finite(), "{size:?}");
         }
+    }
+
+    #[test]
+    fn item_attributes_match_the_struct_layout() {
+        let offsets: Vec<u64> = ITEM_ATTRIBUTES.iter().map(|a| a.offset).collect();
+        let s = ItemInstance::zeroed();
+        let base = &s as *const _ as usize;
+        let field = |p: *const f32| (p as usize - base) as u64;
+        let expected = [
+            field(s.m0.as_ptr()),
+            field(s.m1.as_ptr()),
+            field(s.m2.as_ptr()),
+            field(s.multiply.as_ptr()),
+            field(s.add.as_ptr()),
+            field(&s.opacity),
+        ];
+        assert_eq!(offsets, expected);
+    }
+
+    #[test]
+    fn pixel_snapping_rounds_translation_only() {
+        let m = Affine2::from_scale_angle_translation(Vec2::splat(1.5), 0.3, Vec2::new(10.4, 7.6));
+        let s = snap_to_pixels(m);
+        assert_eq!(s.translation, Vec2::new(10.0, 8.0));
+        assert_eq!(s.matrix2, m.matrix2);
     }
 }

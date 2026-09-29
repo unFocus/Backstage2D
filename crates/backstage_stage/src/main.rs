@@ -6,10 +6,11 @@
 //! `docs/adr/0002-stage-process-isolation.md`.
 
 use anyhow::{Context, Result, bail};
+use backstage_core::{Project, RuntimeState, Time, evaluate};
 use backstage_protocol::{
     FRAME_SLOTS, FrameRing, PROTOCOL_VERSION, ToStage, ToTools, read_message, write_message,
 };
-use backstage_render::{HeadlessGpu, OFFSCREEN_FORMAT, OffscreenTarget, Renderer, TestScene};
+use backstage_render::{Frame, HeadlessGpu, OFFSCREEN_FORMAT, OffscreenTarget, Renderer};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -33,10 +34,21 @@ fn is_disconnect(e: &anyhow::Error) -> bool {
 }
 
 fn run() -> Result<()> {
-    let socket_path = parse_args(std::env::args().skip(1))?;
+    let Args { socket: socket_path, project: project_dir } = parse_args(std::env::args().skip(1))?;
     let mut socket = UnixStream::connect(&socket_path)
         .with_context(|| format!("connecting to {}", socket_path.display()))?;
     let inbox = spawn_reader(socket.try_clone()?);
+
+    let project = match load_project(project_dir.as_deref()) {
+        Ok(project) => project,
+        Err(e) => {
+            // Tell the tools process why, then fail (its supervisor decides
+            // whether to retry).
+            let _ = write_message(&mut socket, &ToTools::Log(format!("{e:#}")));
+            return Err(e);
+        }
+    };
+    let state = RuntimeState::default();
 
     let gpu = pollster::block_on(HeadlessGpu::new("stage"))
         .map_err(|e| anyhow::anyhow!("initializing GPU: {e}"))?;
@@ -98,10 +110,12 @@ fn run() -> Result<()> {
         }
 
         if let Some(t) = target.as_mut() {
-            let scene = TestScene { time: started.elapsed().as_secs_f32(), scale: scale as f32, pointer };
+            let now = Time::from_ratio(started.elapsed().as_nanos() as i64, 1_000_000_000);
+            let scene = evaluate(&project, &state, now);
+            let frame = Frame { project: &project, scene: &scene, scale: scale as f32, pointer };
             seq += 1;
             let slot = (seq % FRAME_SLOTS as u64) as u32;
-            t.render_into_ring(&gpu, &mut renderer, &scene, slot, seq)?;
+            t.render_into_ring(&gpu, &mut renderer, &frame, slot, seq)?;
             write_message(&mut socket, &ToTools::FrameReady { generation: t.generation, slot, seq })?;
         }
 
@@ -118,10 +132,35 @@ fn run() -> Result<()> {
     }
 }
 
-fn parse_args(mut args: impl Iterator<Item = String>) -> Result<PathBuf> {
-    match (args.next().as_deref(), args.next(), args.next()) {
-        (Some("--socket"), Some(path), None) => Ok(path.into()),
-        _ => bail!("usage: backstage_stage --socket <path>"),
+/// Command-line arguments: `--socket <path> [--project <dir>]`.
+#[derive(Debug, PartialEq)]
+struct Args {
+    socket: PathBuf,
+    project: Option<PathBuf>,
+}
+
+fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args> {
+    let usage = "usage: backstage_stage --socket <path> [--project <dir>]";
+    let (mut socket, mut project) = (None, None);
+    while let Some(flag) = args.next() {
+        let slot = match flag.as_str() {
+            "--socket" => &mut socket,
+            "--project" => &mut project,
+            _ => bail!("unknown argument {flag:?}; {usage}"),
+        };
+        let value = args.next().with_context(|| format!("{flag} needs a value; {usage}"))?;
+        if slot.replace(PathBuf::from(value)).is_some() {
+            bail!("{flag} given twice; {usage}");
+        }
+    }
+    Ok(Args { socket: socket.context(usage)?, project })
+}
+
+/// The project to show: loaded from `dir`, or the built-in sample.
+fn load_project(dir: Option<&std::path::Path>) -> Result<Project> {
+    match dir {
+        Some(dir) => backstage_core::load(dir).with_context(|| format!("loading project {}", dir.display())),
+        None => Ok(backstage_core::sample::bounce()),
     }
 }
 
@@ -160,13 +199,13 @@ impl Target {
         &mut self,
         gpu: &HeadlessGpu,
         renderer: &mut Renderer,
-        scene: &TestScene,
+        frame: &Frame,
         slot: u32,
         seq: u64,
     ) -> Result<()> {
         let ring = &mut self.ring;
         self.offscreen
-            .render_and_read(gpu, renderer, scene, |pixels| ring.write(slot, seq, pixels))
+            .render_and_read(gpu, renderer, frame, |pixels| ring.write(slot, seq, pixels))
             .map_err(|e| anyhow::anyhow!("rendering frame: {e}"))
     }
 }
@@ -188,20 +227,35 @@ fn ring_path(generation: u64) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_args;
+    use super::{Args, parse_args};
+    use std::path::PathBuf;
 
     fn args(list: &[&str]) -> impl Iterator<Item = String> {
         list.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter()
     }
 
     #[test]
-    fn parses_socket_path() {
-        assert_eq!(parse_args(args(&["--socket", "/run/x.sock"])).unwrap().to_str(), Some("/run/x.sock"));
+    fn parses_socket_and_optional_project() {
+        assert_eq!(
+            parse_args(args(&["--socket", "/run/x.sock"])).unwrap(),
+            Args { socket: PathBuf::from("/run/x.sock"), project: None }
+        );
+        assert_eq!(
+            parse_args(args(&["--project", "p.bs2d", "--socket", "/s"])).unwrap(),
+            Args { socket: PathBuf::from("/s"), project: Some(PathBuf::from("p.bs2d")) }
+        );
     }
 
     #[test]
     fn rejects_bad_arguments() {
-        for bad in [&[][..], &["--socket"], &["--sock", "/x"], &["--socket", "/x", "extra"]] {
+        for bad in [
+            &[][..],
+            &["--socket"],
+            &["--sock", "/x"],
+            &["--socket", "/x", "extra"],
+            &["--project", "p"],
+            &["--socket", "/a", "--socket", "/b"],
+        ] {
             assert!(parse_args(args(bad)).is_err(), "{bad:?}");
         }
     }

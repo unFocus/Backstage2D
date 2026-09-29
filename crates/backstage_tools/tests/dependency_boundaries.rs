@@ -82,7 +82,11 @@ fn runtime_crates_never_link_the_gui() {
 
 #[test]
 fn tools_never_links_gpu_or_vm() {
-    assert_excludes(&Graph::load(), "backstage_tools", &["wgpu", "backstage_render", "backstage_script"]);
+    assert_excludes(
+        &Graph::load(),
+        "backstage_tools",
+        &["wgpu", "lyon", "backstage_render", "backstage_script"],
+    );
 }
 
 #[test]

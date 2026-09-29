@@ -25,6 +25,35 @@ fn resize(stage: &mut StageHarness, width: u32, height: u32) -> u64 {
 }
 
 #[test]
+fn loads_a_project_directory() {
+    let sample = concat!(env!("CARGO_MANIFEST_DIR"), "/../../samples/bounce.bs2d");
+    let mut stage = StageHarness::spawn_with(true, &["--project", sample]);
+    stage.handshake();
+    resize(&mut stage, 550, 400);
+    // The sample's green ground strip spans the stage's bottom (stage y 340..400).
+    let frame = stage.next_frame();
+    assert!(
+        common::color_close(
+            frame.pixel(275, 360),
+            [0x6a as f32 / 255.0, 0xbf as f32 / 255.0, 0x4b as f32 / 255.0, 1.0]
+        ),
+        "{:?}",
+        frame.pixel(275, 360)
+    );
+}
+
+#[test]
+fn bad_project_is_reported_and_fails() {
+    let mut stage = StageHarness::spawn_with(true, &["--project", "/nonexistent.bs2d"]);
+    let log = stage.recv_until(|m| match m {
+        ToTools::Log(line) => Some(line.clone()),
+        _ => None,
+    });
+    assert!(log.contains("nonexistent.bs2d"), "{log}");
+    assert!(!stage.wait_exit().success());
+}
+
+#[test]
 fn handshake_reports_adapter() {
     let mut stage = StageHarness::spawn();
     assert!(!stage.handshake().is_empty());

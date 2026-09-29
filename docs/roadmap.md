@@ -33,8 +33,8 @@ defined in [ADR 0003](adr/0003-document-model.md).
 - [x] Project directory format (`name.bs2d/`, RON), with the sample project `samples/bounce.bs2d/` as the format snapshot
 - [x] `evaluate` for a single animation: easing, loop modes, step, nested synced and free instances (`scene_dump` example prints a scene)
 - [x] Mixer with crossfade blending (`scene_dump --crossfade squash@1s/0.2s` shows it)
-- [ ] lyon tessellation with a mesh cache. Draws the evaluated scene instead of the test scene. MSAA. Pixel-art mode.
-- [ ] Sample project (in the repo) and golden images of it
+- [x] lyon tessellation with a mesh cache. Draws the evaluated scene instead of the test scene. MSAA. Pixel-art mode.
+- [x] Sample project (in the repo) and golden images of it
 - [ ] `backstage_player`: a winit + wgpu window that plays a project
 
 ### M2: edit commands and crash recovery with no lost work

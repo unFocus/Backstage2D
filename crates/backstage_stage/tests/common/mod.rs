@@ -45,6 +45,11 @@ impl StageHarness {
     }
 
     pub fn spawn_with_fallback(fallback: bool) -> Self {
+        Self::spawn_with(fallback, &[])
+    }
+
+    /// Starts the stage with extra command-line arguments.
+    pub fn spawn_with(fallback: bool, extra: &[&str]) -> Self {
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let runtime_dir = std::env::temp_dir().join(format!(
             "backstage-stage-it-{}-{}",
@@ -57,7 +62,7 @@ impl StageHarness {
         let listener = UnixListener::bind(&socket_path).unwrap();
 
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_backstage_stage"));
-        cmd.arg("--socket").arg(&socket_path).env("XDG_RUNTIME_DIR", &runtime_dir);
+        cmd.arg("--socket").arg(&socket_path).args(extra).env("XDG_RUNTIME_DIR", &runtime_dir);
         if fallback {
             cmd.env(backstage_render::FALLBACK_ENV, "1");
         }

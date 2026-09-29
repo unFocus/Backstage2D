@@ -16,6 +16,9 @@ use std::time::{Duration, Instant};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Project directory for the stage to show; unset means its built-in sample.
+pub const PROJECT_ENV: &str = "BACKSTAGE_PROJECT";
+
 /// Session numbers are unique across all supervisors in this process, so
 /// socket paths (`tools-<pid>-<session>.sock`) never collide.
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
@@ -79,7 +82,13 @@ impl Supervisor {
         let socket_path = runtime_dir()?.join(format!("tools-{}-{session}.sock", std::process::id()));
         let _ = std::fs::remove_file(&socket_path);
         let listener = UnixListener::bind(&socket_path)?;
-        let child = Command::new(&self.stage_binary).arg("--socket").arg(&socket_path).spawn()?;
+        let mut command = Command::new(&self.stage_binary);
+        command.arg("--socket").arg(&socket_path);
+        // Stopgap until File → Open (M3): which project the stage shows.
+        if let Some(project) = std::env::var_os(PROJECT_ENV) {
+            command.arg("--project").arg(project);
+        }
+        let child = command.spawn()?;
         let stage_pid = child.id();
         self.child = Some(child);
 

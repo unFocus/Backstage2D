@@ -5,7 +5,10 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+backstage_core.workspace = true
 bytemuck.workspace = true
+glam.workspace = true
+lyon.workspace = true
 wgpu.workspace = true
 
 [dev-dependencies]

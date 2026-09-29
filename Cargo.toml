@@ -17,6 +17,7 @@ backstage_script = { path = "crates/backstage_script" }
 anyhow = "1.0.104"
 getrandom = "0.4.3"
 glam = { version = "0.33.11", features = ["serde"] }
+lyon = "1.0.19"
 ron = "0.12.2"
 thiserror = "2.0.21"
 bytemuck = { version = "1.25", features = ["derive"] }

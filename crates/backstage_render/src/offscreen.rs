@@ -1,7 +1,7 @@
 //! Headless GPU setup and offscreen rendering with CPU readback. Used by the
 //! stage process and by tests (golden images).
 
-use crate::{Renderer, TestScene};
+use crate::{Frame, Renderer};
 use std::sync::mpsc;
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -82,17 +82,17 @@ impl OffscreenTarget {
         self.stride
     }
 
-    /// Renders `scene`, waits for the GPU, and passes the pixels
+    /// Renders `frame`, waits for the GPU, and passes the pixels
     /// (`stride × height` bytes) to `read`.
     pub fn render_and_read(
         &mut self,
         gpu: &HeadlessGpu,
         renderer: &mut Renderer,
-        scene: &TestScene,
+        frame: &Frame,
         read: impl FnOnce(&[u8]),
     ) -> Result<(), Error> {
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
-        renderer.render(&gpu.device, &gpu.queue, &mut encoder, &self.view, self.size, scene);
+        renderer.render(&gpu.device, &gpu.queue, &mut encoder, &self.view, self.size, frame);
         encoder.copy_texture_to_buffer(
             self.texture.as_image_copy(),
             wgpu::TexelCopyBufferInfo {

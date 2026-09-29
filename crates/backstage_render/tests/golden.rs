@@ -1,10 +1,12 @@
-//! Golden-image regression tests for the renderer, on the software adapter.
+//! Golden-image regression tests: the sample project (`sample::bounce()`)
+//! evaluated at fixed times and rendered on the software adapter.
 //!
 //! `BACKSTAGE_BLESS=1 cargo test -p backstage_render --test golden` rewrites
 //! the reference images in `tests/golden/`. On a mismatch, the actual image
 //! and a diff are written to `target/golden-failures/`.
 
-use backstage_render::{FALLBACK_ENV, HeadlessGpu, OFFSCREEN_FORMAT, OffscreenTarget, Renderer, TestScene};
+use backstage_core::{RuntimeState, Time, evaluate, sample};
+use backstage_render::{FALLBACK_ENV, Frame, HeadlessGpu, OFFSCREEN_FORMAT, OffscreenTarget, Renderer};
 use image::{Rgba, RgbaImage};
 use std::path::{Path, PathBuf};
 
@@ -16,16 +18,20 @@ const CHANNEL_TOLERANCE: u8 = 2;
 /// and re-bless.
 const MAX_BAD_PIXELS: usize = 16;
 
-fn render(size: (u32, u32), scene: &TestScene) -> RgbaImage {
+/// Renders the sample at `at` into a `size` image.
+fn render(size: (u32, u32), at: Time, scale: f32, pointer: Option<(f32, f32)>) -> RgbaImage {
     // SAFETY: set before any threads of ours read the environment.
     unsafe { std::env::set_var(FALLBACK_ENV, "1") };
     let gpu = pollster::block_on(HeadlessGpu::new("golden test")).expect("software adapter (lavapipe)");
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut target = OffscreenTarget::new(&gpu.device, size);
+    let project = sample::bounce();
+    let scene = evaluate(&project, &RuntimeState::default(), at);
+    let frame = Frame { project: &project, scene: &scene, scale, pointer };
     let stride = target.stride() as usize;
     let mut image = RgbaImage::new(size.0, size.1);
     target
-        .render_and_read(&gpu, &mut renderer, scene, |pixels| {
+        .render_and_read(&gpu, &mut renderer, &frame, |pixels| {
             for (y, row) in pixels.chunks(stride).enumerate() {
                 let row = &row[..size.0 as usize * 4];
                 let start = y * size.0 as usize * 4;
@@ -40,6 +46,7 @@ fn check(name: &str, actual: RgbaImage) {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
     let golden_path = dir.join(format!("{name}.png"));
     if std::env::var("BACKSTAGE_BLESS").is_ok_and(|v| v == "1") {
+        std::fs::create_dir_all(&dir).unwrap();
         actual.save(&golden_path).unwrap();
         eprintln!("blessed {}", golden_path.display());
         return;
@@ -75,18 +82,27 @@ fn failures_dir() -> PathBuf {
     dir
 }
 
-#[test]
-fn stage_at_1x() {
-    check("stage_550x400_1x", render((550, 400), &TestScene { time: 0.0, scale: 1.0, pointer: None }));
+fn secs(num: i64, den: i64) -> Time {
+    Time::from_ratio(num, den)
 }
 
 #[test]
-fn stage_at_1_5x_with_pointer() {
-    let scene = TestScene { time: 2.5, scale: 1.5, pointer: Some((120.0, 80.0)) };
-    check("stage_800x600_1_5x_pointer", render((800, 600), &scene));
+fn sample_at_start() {
+    check("sample_t0_550x400_1x", render((550, 400), Time::ZERO, 1.0, None));
+}
+
+#[test]
+fn sample_mid_bounce_at_1_5x_with_pointer() {
+    check("sample_t0_5_800x600_1_5x_pointer", render((800, 600), secs(1, 2), 1.5, Some((120.0, 80.0))));
+}
+
+#[test]
+fn sample_blink() {
+    // At 1.6 s the eye flipbook shows its closed drawing.
+    check("sample_t1_6_blink_550x400_1x", render((550, 400), secs(8, 5), 1.0, None));
 }
 
 #[test]
 fn tiny_viewport() {
-    check("tiny_64x64", render((64, 64), &TestScene { time: 1.0, scale: 1.0, pointer: None }));
+    check("tiny_64x64", render((64, 64), Time::ZERO, 1.0, None));
 }
