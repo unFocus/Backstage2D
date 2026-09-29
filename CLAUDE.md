@@ -43,6 +43,9 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
   itself.
 - Platforms are Wayland, macOS, and Windows 11. No X11 (winit is built
   Wayland-only). No GPL dependencies.
+- **Licensing is undecided:** `LICENSE` says all rights reserved, and every
+  crate has `publish = false`. Don't add license headers or change that
+  without the user deciding.
 
 ## Model conventions (ADR 0003)
 - **Time is `Time` in flicks, never frames.** A 2 s tween takes 2 s at any

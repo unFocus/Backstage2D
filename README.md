@@ -48,3 +48,8 @@ scripts/check.sh                 # everything CI checks (see docs/testing.md)
 Player keys: **Space** pauses, **F** / **F11** toggles fullscreen, **Esc** or
 **Ctrl+Q** quits. `--max-fps N` caps the frame rate (it otherwise follows the
 display).
+
+## License
+
+Copyright (c) 2026 Kevin Newman. **All rights reserved.** The code is public
+for reference only; no license is granted yet. See [LICENSE](LICENSE).
