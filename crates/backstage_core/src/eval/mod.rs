@@ -1,13 +1,14 @@
 //! `evaluate`: the document plus runtime state at a moment, as a flat list
 //! of things to draw. Pure and deterministic. See ADR 0003.
 
+pub mod blend;
 pub mod clock;
 pub mod ease;
 pub mod runtime;
 pub mod scene;
 pub mod track;
 
-pub use runtime::{InstancePath, Player, RuntimeState};
+pub use runtime::{InstancePath, Layer, Mixer, RuntimeState, Weight};
 pub use scene::{DrawContent, DrawItem, Scene};
 
 use crate::animation::{Animation, Property, Track, Value};
@@ -29,24 +30,15 @@ pub fn evaluate<'p>(project: &'p Project, state: &RuntimeState, now: Time) -> Sc
 }
 
 /// Any composition as the root (the editor edits one composition at a
-/// time). The root runs as a free instance at the empty path, so its player
-/// in `state` picks its animation and start time.
+/// time). The root runs as a free instance at the empty path, so its mixer
+/// in `state` picks its animations.
 pub fn evaluate_from<'p>(project: &'p Project, state: &RuntimeState, root: CompId, now: Time) -> Scene<'p> {
     let mut eval = Evaluator { project, state, now, items: Vec::new() };
     if let Some(comp) = project.compositions.get(&root) {
         let path = InstancePath::new();
-        let player = state.players.get(&path);
-        let anim_id = player.and_then(|p| p.animation).or(comp.default_animation);
-        let clock = now - player.map_or(Time::ZERO, |p| p.started);
-        eval.composition(
-            comp,
-            anim_id.and_then(|a| comp.animations.get(&a)),
-            clock,
-            Repeat::Natural,
-            &path,
-            &Inherited::ROOT,
-            0,
-        );
+        let default = comp.default_animation;
+        let layers = eval.free_layers(comp, &path, default);
+        eval.composition(comp, layers, &path, &Inherited::ROOT, 0);
     }
     Scene { items: eval.items }
 }
@@ -67,12 +59,28 @@ impl Inherited {
     };
 }
 
-/// One composition instance being walked: its animation, local time, and
-/// tracks grouped by node.
+/// An animation to evaluate on a composition instance: which one, its clock
+/// reading, how it repeats, and its weight.
+struct LayerInput<'p> {
+    anim: &'p Animation,
+    clock: Time,
+    repeat: Repeat,
+    weight: f32,
+}
+
+/// An active layer of a composition instance, resolved to local time.
+struct ActiveLayer<'p> {
+    local: Time,
+    weight: f32,
+    tracks: BTreeMap<NodeId, Vec<&'p Track>>,
+}
+
+/// One composition instance being walked.
 struct Frame<'p> {
     comp: &'p Composition,
-    local: Time,
-    tracks: BTreeMap<NodeId, Vec<&'p Track>>,
+    layers: Vec<ActiveLayer<'p>>,
+    /// Local time of the strongest layer; synced children follow it.
+    dominant_local: Time,
     path: InstancePath,
     depth: usize,
 }
@@ -85,13 +93,41 @@ struct Evaluator<'p, 's> {
 }
 
 impl<'p> Evaluator<'p, '_> {
-    #[allow(clippy::too_many_arguments)]
+    /// Layers of a free instance: from its mixer, or else its default
+    /// animation at full weight from time zero.
+    fn free_layers(
+        &self,
+        comp: &'p Composition,
+        path: &InstancePath,
+        default: Option<crate::id::AnimId>,
+    ) -> Vec<LayerInput<'p>> {
+        match self.state.mixers.get(path) {
+            Some(mixer) => mixer
+                .layers
+                .iter()
+                .filter_map(|layer| {
+                    let anim = comp.animations.get(&layer.animation)?;
+                    let weight = layer.weight.at(self.now);
+                    (weight > 0.0).then_some(LayerInput {
+                        anim,
+                        clock: self.now - layer.started,
+                        repeat: Repeat::Natural,
+                        weight,
+                    })
+                })
+                .collect(),
+            None => default
+                .and_then(|a| comp.animations.get(&a))
+                .map(|anim| LayerInput { anim, clock: self.now, repeat: Repeat::Natural, weight: 1.0 })
+                .into_iter()
+                .collect(),
+        }
+    }
+
     fn composition(
         &mut self,
         comp: &'p Composition,
-        anim: Option<&'p Animation>,
-        clock: Time,
-        repeat: Repeat,
+        inputs: Vec<LayerInput<'p>>,
         path: &InstancePath,
         inherited: &Inherited,
         depth: usize,
@@ -99,29 +135,55 @@ impl<'p> Evaluator<'p, '_> {
         if depth > MAX_DEPTH {
             return;
         }
-        let local = anim.map_or(Time::ZERO, |a| clock::local_time(a, clock, repeat));
-        let mut tracks: BTreeMap<NodeId, Vec<&'p Track>> = BTreeMap::new();
-        for track in anim.map_or(&[][..], |a| &a.tracks) {
-            tracks.entry(track.node).or_default().push(track);
-        }
-        let frame = Frame { comp, local, tracks, path: path.clone(), depth };
+        let layers: Vec<ActiveLayer<'p>> = inputs
+            .into_iter()
+            .map(|input| {
+                let mut tracks: BTreeMap<NodeId, Vec<&'p Track>> = BTreeMap::new();
+                for track in &input.anim.tracks {
+                    tracks.entry(track.node).or_default().push(track);
+                }
+                ActiveLayer {
+                    local: clock::local_time(input.anim, input.clock, input.repeat),
+                    weight: input.weight,
+                    tracks,
+                }
+            })
+            .collect();
+        let dominant_local =
+            blend::strongest(layers.iter().map(|l| (l.local, l.weight))).unwrap_or(Time::ZERO);
+        let frame = Frame { comp, layers, dominant_local, path: path.clone(), depth };
         self.node(&frame, comp.root, inherited);
     }
 
     fn node(&mut self, frame: &Frame<'p>, id: NodeId, parent: &Inherited) {
         let Some(node) = frame.comp.nodes.get(&id) else { return };
-        let tracks = frame.tracks.get(&id).map_or(&[][..], Vec::as_slice);
+
+        // Gather every layer's sample of every property this node animates.
+        let mut samples: BTreeMap<Property, Vec<(Value, f32)>> = BTreeMap::new();
+        for layer in &frame.layers {
+            for track in layer.tracks.get(&id).map_or(&[][..], Vec::as_slice) {
+                if let Some(value) = track::sample_track(track, layer.local) {
+                    samples.entry(track.property).or_default().push((value, layer.weight));
+                }
+            }
+        }
         let mut props = node.rest;
         let mut time_offset = None;
-        for track in tracks {
-            if let Some(value) = track::sample_track(track, frame.local) {
-                if track.property == Property::TimeOffset {
-                    if let Value::Time(t) = value {
-                        time_offset = Some(t);
-                    }
-                } else {
-                    apply(&mut props, track.property, value);
+        for (property, contributions) in &samples {
+            let rest = match (property, &node.kind) {
+                (Property::TimeOffset, NodeKind::Instance(i)) => match i.time {
+                    TimeMode::Synced { offset, .. } => Value::Time(offset),
+                    TimeMode::Free { .. } => continue,
+                },
+                _ => get(&props, *property),
+            };
+            let Some(value) = blend::blend(*property, rest, contributions) else { continue };
+            if *property == Property::TimeOffset {
+                if let Value::Time(t) = value {
+                    time_offset = Some(t);
                 }
+            } else {
+                apply(&mut props, *property, value);
             }
         }
         if !props.visible {
@@ -158,25 +220,52 @@ impl<'p> Evaluator<'p, '_> {
                 if let Some(child) = self.project.compositions.get(&instance.comp) {
                     let mut path = frame.path.clone();
                     path.push(id);
-                    let (anim_id, clock, repeat) = match instance.time {
+                    let inputs = match instance.time {
                         TimeMode::Free { animation } => {
-                            let player = self.state.players.get(&path);
-                            let anim =
-                                player.and_then(|p| p.animation).or(animation).or(child.default_animation);
-                            (anim, self.now - player.map_or(Time::ZERO, |p| p.started), Repeat::Natural)
+                            self.free_layers(child, &path, animation.or(child.default_animation))
                         }
-                        TimeMode::Synced { animation, offset, repeat } => {
-                            (Some(animation), frame.local + time_offset.unwrap_or(offset), repeat)
-                        }
+                        TimeMode::Synced { animation, offset, repeat } => child
+                            .animations
+                            .get(&animation)
+                            .map(|anim| LayerInput {
+                                anim,
+                                clock: frame.dominant_local + time_offset.unwrap_or(offset),
+                                repeat,
+                                weight: 1.0,
+                            })
+                            .into_iter()
+                            .collect(),
                     };
-                    let anim = anim_id.and_then(|a| child.animations.get(&a));
-                    self.composition(child, anim, clock, repeat, &path, &here, frame.depth + 1);
+                    self.composition(child, inputs, &path, &here, frame.depth + 1);
                 }
             }
         }
         for &child in &node.children {
             self.node(frame, child, &here);
         }
+    }
+}
+
+/// Reads a property's current value.
+fn get(props: &Props, property: Property) -> Value {
+    let t = &props.transform;
+    match property {
+        Property::X => Value::Number(t.position.x),
+        Property::Y => Value::Number(t.position.y),
+        Property::Rotation => Value::Number(t.rotation),
+        Property::ScaleX => Value::Number(t.scale.x),
+        Property::ScaleY => Value::Number(t.scale.y),
+        Property::SkewX => Value::Number(t.skew.x),
+        Property::SkewY => Value::Number(t.skew.y),
+        Property::PivotX => Value::Number(t.pivot.x),
+        Property::PivotY => Value::Number(t.pivot.y),
+        Property::Opacity => Value::Number(props.opacity),
+        Property::ColorMultiply => Value::Rgba(props.color.multiply),
+        Property::ColorAdd => Value::Rgba(props.color.add),
+        Property::Visible => Value::Bool(props.visible),
+        Property::Blend => Value::Blend(props.blend),
+        Property::Drawing => Value::Index(props.drawing),
+        Property::TimeOffset => Value::Time(Time::ZERO),
     }
 }
 
@@ -353,13 +442,13 @@ mod tests {
     }
 
     #[test]
-    fn players_shift_free_instances() {
+    fn mixers_shift_free_instances() {
         let p = sample::bounce();
         let mut state = RuntimeState::default();
-        state.players.insert(vec![FREE_BALL], Player { animation: None, started: s(1, 4) });
+        state.play(&vec![FREE_BALL], BALL_BOUNCE, s(1, 4));
         let scene = evaluate(&p, &state, s(3, 4));
         assert!(close(origin(item(&scene, &[FREE_BALL], BALL_BODY)), Vec2::new(400.0, 300.0)));
-        // The synced ball ignores players: it follows its parent.
+        // The synced ball ignores mixers: it follows its parent.
         let synced = evaluate(&p, &RuntimeState::default(), s(3, 4));
         assert_eq!(item(&scene, &[SYNCED_BALL], BALL_BODY), item(&synced, &[SYNCED_BALL], BALL_BODY));
     }
@@ -395,5 +484,98 @@ mod tests {
         stage.nodes.get_mut(&STAGE_ROOT).unwrap().children.insert(0, NodeId::from_raw(1));
         let scene = evaluate(&p, &RuntimeState::default(), Time::ZERO);
         assert!(scene.items.iter().all(|i| i.node != GROUND));
+    }
+
+    /// Samples one track of `anim` directly, for hand-computed expectations.
+    fn raw(
+        p: &Project,
+        comp: CompId,
+        anim: crate::id::AnimId,
+        node: NodeId,
+        prop: Property,
+        local: Time,
+    ) -> f32 {
+        let a = &p.compositions[&comp].animations[&anim];
+        match track::sample_track(a.track(node, prop).unwrap(), clock::local_time(a, local, Repeat::Natural))
+        {
+            Some(Value::Number(v)) => v,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn body_y_and_scale_x(scene: &Scene) -> (f32, f32) {
+        let body = item(scene, &[FREE_BALL], BALL_BODY);
+        let origin = body.transform.transform_point2(Vec2::ZERO);
+        let x_axis = body.transform.transform_vector2(Vec2::X);
+        (origin.y, x_axis.length())
+    }
+
+    #[test]
+    fn explicit_full_weight_layer_matches_the_implicit_default() {
+        let p = sample::bounce();
+        let mut state = RuntimeState::default();
+        state.play(&vec![FREE_BALL], BALL_BOUNCE, Time::ZERO);
+        for t in [Time::ZERO, s(1, 3), s(5, 4)] {
+            assert_eq!(evaluate(&p, &state, t), evaluate(&p, &RuntimeState::default(), t));
+        }
+    }
+
+    #[test]
+    fn crossfade_blends_each_animation_at_its_own_time() {
+        let p = sample::bounce();
+        let mut state = RuntimeState::default();
+        let path = vec![FREE_BALL];
+        let (start, dur) = (s(1, 1), s(1, 5));
+        state.crossfade(&p, &path, BALL_SQUASH, start, dur);
+
+        // Midpoint: bounce (started at 0) is 1.1 s in, squash (started at 1 s) is 0.1 s in,
+        // each at weight 0.5. Bounce doesn't key ScaleX, so its half falls back to rest (1).
+        let mid = start + s(1, 10);
+        let bounce_y = raw(&p, BALL, BALL_BOUNCE, BALL_BODY, Property::Y, mid);
+        let squash_sx = raw(&p, BALL, BALL_SQUASH, BALL_BODY, Property::ScaleX, mid - start);
+        let (y, sx) = body_y_and_scale_x(&evaluate(&p, &state, mid));
+        // Squash doesn't key Y either: its half of Y falls back to rest (0).
+        assert!((y - (300.0 + 0.5 * bounce_y)).abs() < EPS, "y {y}");
+        assert!((sx - (0.5 * 1.0 + 0.5 * squash_sx)).abs() < EPS, "scale x {sx}");
+
+        // After the fade, it's squash alone (and squash holds its end once finished).
+        let after = start + s(1, 2);
+        let (y, sx) = body_y_and_scale_x(&evaluate(&p, &state, after));
+        let alone_sx = raw(&p, BALL, BALL_SQUASH, BALL_BODY, Property::ScaleX, after - start);
+        assert!((y - 300.0).abs() < EPS && (sx - alone_sx).abs() < EPS, "y {y}, sx {sx}");
+
+        // The synced ball follows its parent, not the free ball's mixer.
+        let plain = evaluate(&p, &RuntimeState::default(), mid);
+        assert_eq!(
+            item(&evaluate(&p, &state, mid), &[SYNCED_BALL], BALL_BODY),
+            item(&plain, &[SYNCED_BALL], BALL_BODY)
+        );
+        assert_eq!(evaluate(&p, &state, mid), evaluate(&p, &state, mid));
+    }
+
+    #[test]
+    fn synced_children_follow_the_dominant_layer() {
+        let mut p = sample::bounce();
+        // Give the stage a second, 1 s animation, and crossfade the root to it.
+        let second = crate::id::AnimId::from_raw(0x5747_2001);
+        let stage = p.compositions.get_mut(&STAGE).unwrap();
+        stage
+            .animations
+            .insert(second, Animation::new("second", Time::from_secs(1), crate::animation::LoopMode::Loop));
+        let mut state = RuntimeState::default();
+        state.crossfade(&p, &vec![], second, s(1, 1), s(1, 5));
+
+        let eyes_drawing = |t: Time| {
+            let scene = evaluate(&p, &state, t);
+            let DrawContent::Shape(shape) = item(&scene, &[EYES], BLINKER_EYE).content else { panic!() };
+            let NodeKind::Flipbook(d) = &p.compositions[&BLINKER].nodes[&BLINKER_EYE].kind else { panic!() };
+            d.iter().position(|d| std::ptr::eq(&d.shape, shape)).unwrap()
+        };
+        // At 1.05 s "main" still dominates (local 1.05 s → drawing 0)...
+        assert_eq!(eyes_drawing(s(105, 100)), 0);
+        // ...at 1.55 s "second" dominates: it started at 1 s, so the blinker sees 0.55 s → drawing 0,
+        // whereas following "main" would have shown drawing 1.
+        assert_eq!(eyes_drawing(s(155, 100)), 0);
+        assert_eq!(evaluate(&p, &RuntimeState::default(), s(155, 100)).items.len(), 4);
     }
 }

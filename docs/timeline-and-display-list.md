@@ -26,15 +26,33 @@ spans, and no mutable display list.
 
 ## Nesting and blending
 - A nested instance is either:
-  - **Synced:** it plays one of its animations on the parent's clock, with
+  - **Synced:** it plays one of its animations on its parent's clock, with
     an offset and repeat. This is the Flash "Graphic" trick.
   - **Free:** it has its own clock and its own **mixer**.
-- The **mixer** blends several animations by weight:
-  - Numeric properties interpolate. Rotation takes the shortest arc; colors
-    blend in linear space.
-  - Discrete properties take the value from the strongest animation.
-- **Crossfade** comes first. Blend spaces, additive layers, and state
-  machines follow.
+- A **mixer** holds weighted **layers**. Each layer is an animation with
+  its own start time, and a weight that is either fixed or fading linearly.
+  An instance without a mixer plays its configured (or default) animation
+  at full weight from time zero.
+- **Runtime API** (`RuntimeState`):
+  - `play` switches immediately.
+  - `crossfade` fades every other layer out and the target in. A layer
+    that's still fading comes back without restarting, so quickly moving on
+    and off a button is smooth.
+  - `prune` drops layers that have finished fading out.
+- **Blending rules**, for each property keyed by at least one layer:
+  - **Numbers, colors (`Rgba`), and times.** With total weight `W`:
+    - If `W ≥ 1`, the weighted average.
+    - If `W < 1`, `rest·(1−W) + Σ wᵢvᵢ`: the remainder falls back to the
+      rest value.
+
+    So a crossfade is exactly `(1−f)·A + f·B`. A property only A animates
+    eases back to rest as B takes over.
+  - **Rotation and skew** take the shortest arc (350° and 10° meet at 0°).
+  - **Discrete** properties (visibility, blend mode, flipbook drawing)
+    come from the strongest layer. A later layer wins a tie.
+  - **Synced children** follow the parent's **dominant** (highest-weight)
+    layer's time.
+- **Later:** blend spaces, additive layers, eased fades, and state machines.
 
 ## Evaluation rules
 Implemented in `backstage_core::eval`.
@@ -59,8 +77,7 @@ Implemented in `backstage_core::eval`.
   - An invisible node hides its whole subtree.
 - **Painter's order:** depth-first, in child order. An instance's content
   draws before the instance node's own children.
-- **Not yet:** masks (skipped for now), blending of several animations
-  (next), and script overrides.
+- **Not yet:** masks (skipped for now) and script overrides.
 
 ## The scene
 - `evaluate(project, runtime_state, now)` produces the scene to draw. It's a
