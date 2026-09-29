@@ -3,7 +3,7 @@
 - [vision.md](vision.md): what Backstage2D is, and what it isn't
 - [architecture.md](architecture.md): crate layout and core data model
 - [timeline-and-display-list.md](timeline-and-display-list.md): how compositions, animations, and the evaluated scene behave
-- [rendering.md](rendering.md): wgpu renderer plan
+- [rendering.md](rendering.md): the renderer (what's implemented, what's next)
 - [scripting.md](scripting.md): scripting language options
 - [platforms.md](platforms.md): supported platforms (modern only, Wayland first)
 - [dev-setup.md](dev-setup.md): building on the dev host (GTK via Homebrew)

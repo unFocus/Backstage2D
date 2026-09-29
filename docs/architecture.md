@@ -6,9 +6,9 @@
  tools process                           stage process (restartable)
 ┌──────────────────────┐    protocol     ┌──────────────────────────────┐
 │ backstage_tools      │ ──commands────> │ backstage_stage              │
-│  GUI toolkit (TBD)   │ ──queries─────> │  document (edit authority)   │
-│  timeline, library,  │ <──committed─── │  display list + renderer     │
-│  properties panels   │    commands     │  on-stage edit hooks:        │
+│  GTK 4 + Relm4       │ ──queries─────> │  document (edit authority)   │
+│  timeline, library,  │ <──committed─── │  evaluate + renderer         │
+│  properties panels   │    commands     │  on-stage edit hooks (M4):   │
 │  document copy +     │ <──frames────── │   selection, bounds, bezier, │
 │  autosave journal    │    (opt. B/C)   │   transform, snapping        │
 └─────────┬────────────┘                 └─────────────┬────────────────┘
@@ -21,11 +21,21 @@
 See [ADR 0002](adr/0002-stage-process-isolation.md) for how the processes
 are split and how state is copied between them.
 
+**Built so far:**
+- The process split, supervision, and crash/hang recovery.
+- Shared-memory frames, and the stage rendering the evaluated project.
+- The standalone player.
+
+**Still to come:** commands flowing between the processes and the editor's
+document copy (M2), and the on-stage edit hooks (M4). Until then, the stage
+shows a project loaded from disk, or the built-in sample.
+
 Rules:
 1. `backstage_core` has **no** GPU, windowing, or GUI dependencies. It can be
    tested headless.
-2. `backstage_render` receives a *flattened render list* built from the
-   display list. It never walks the document model directly.
+2. `backstage_render` draws the flat `Scene` that `backstage_core::evaluate`
+   produces. It never walks the document tree or samples animations itself.
+   It reads only the project settings it needs to frame the stage.
 3. The editor and the player share the same core, render, and script crates.
    Authoring preview and published playback must behave the same.
 4. The GUI framework only matters to the editor crate. Changing it should

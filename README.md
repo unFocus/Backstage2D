@@ -2,28 +2,34 @@
 
 [![CI](https://github.com/unFocus/Backstage2D/actions/workflows/ci.yml/badge.svg)](https://github.com/unFocus/Backstage2D/actions/workflows/ci.yml)
 
-A 2D animation and interactive-content engine in Rust. It borrows the Flash Pro
-model (stage, timeline, symbols, display list) and updates it with modern
-ideas. Rendering goes through wgpu.
+A 2D animation and interactive-content engine in Rust. It starts from the
+Flash Pro model (stage, timeline, reusable animated symbols) and modernizes it:
+- Compositions with named, blendable animations.
+- Time instead of frames.
+- A pure evaluated scene instead of a mutable display list.
+- A crash-isolated stage process.
+- Vector rendering with lyon on wgpu.
 
-Status: pre-alpha. Projects play in the editor's live stage and in the
-standalone player;
-see the [roadmap](docs/roadmap.md). The original 2012 AS3 Backstage2D is
-preserved on the [`archive`](https://github.com/unFocus/Backstage2D/tree/archive)
-branch. Start with [`docs/`](docs/README.md).
+Status: pre-alpha. M1 is done: projects play live in the editor's stage and in
+the standalone player. M2 (edit commands, undo, crash recovery that keeps your
+work) is next. See the [roadmap](docs/roadmap.md), and start with
+[`docs/`](docs/README.md). The original 2012 AS3 Backstage2D is preserved on
+the [`archive`](https://github.com/unFocus/Backstage2D/tree/archive) branch.
 
 ## Layout
 
 | Path | Purpose |
 |---|---|
-| `crates/backstage_core` | Document model, display list, timeline. No GPU or GUI dependencies. |
-| `crates/backstage_render` | wgpu renderer for the display list. |
-| `crates/backstage_script` | Scripting language and VM. |
+| `crates/backstage_core` | Document model (projects, compositions, animations), time, project files, `evaluate`, and the mixer. No GPU or GUI dependencies. |
+| `crates/backstage_render` | Draws an evaluated scene with wgpu (lyon meshes, gradients, MSAA). |
+| `crates/backstage_script` | Placeholder for scripting (M6). |
 | `crates/backstage_protocol` | Messages and shared-memory frames between stage and tools. |
 | `crates/backstage_stage` | Editing engine process: renders the stage and streams frames. (runtime side) |
 | `crates/backstage_player` | Standalone player: plays a project in its own window (winit + wgpu). |
 | `crates/backstage_tools` | Editor GUI (GTK 4 + Relm4). Starts and supervises the stage. (editor side) |
-| `docs/` | Vision, architecture, and decision records. |
+| `samples/` | Sample projects. `bounce.bs2d` is also the file-format snapshot. |
+| `scripts/check.sh` | Every check CI runs: fmt, clippy, tests, and headless smoke tests. |
+| `docs/` | Vision, architecture, decision records, roadmap, dev setup, and testing. |
 
 
 ## Building
@@ -35,6 +41,8 @@ export PKG_CONFIG=/home/linuxbrew/.linuxbrew/bin/pkgconf   # Homebrew GTK on Baz
 cargo build --workspace
 cargo run -p backstage_tools     # editor; starts backstage_stage itself
 cargo run -p backstage_player -- samples/bounce.bs2d   # play a project in a window
+cargo run -p backstage_core --example scene_dump -- samples/bounce.bs2d 0.5s   # print a scene
+scripts/check.sh                 # everything CI checks (see docs/testing.md)
 ```
 
 Player keys: **Space** pauses, **F** / **F11** toggles fullscreen, **Esc** or

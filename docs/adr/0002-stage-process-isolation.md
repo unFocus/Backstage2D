@@ -1,6 +1,10 @@
 # ADR 0002: Stage engine in its own process, tools as a separate view
 
-**Status:** Accepted (process split, crash recovery, and display option B are implemented in the M0.5 mockup; document authority and edit hooks are still to be built)
+**Status:** Accepted.
+- **Implemented:** the process split, crash recovery, and display option B
+  (M0.5). The stage rendering the real project (M1).
+- **Still to build:** document authority and command replay (M2), and the
+  edit hooks (M4).
 
 ## Terms
 - **Stage (engine):** the `backstage_stage` process. It renders the display
@@ -17,7 +21,7 @@ We want the part most likely to fail (GPU work, rendering, and eventually
 user code) isolated so it can crash or be restarted without losing the
 user's work or bringing down the tools UI.
 
-## Decision (proposed)
+## Decision
 
 ### 1. The stage owns the live state and edit interaction
 The stage process holds the working document, the derived display list,

@@ -45,7 +45,8 @@ link xorgproto`.
 
 ## Running
 ```sh
-cargo run -p backstage_tools
+cargo run -p backstage_tools                          # editor
+cargo run -p backstage_player -- samples/bounce.bs2d  # player (no editor)
 ```
 The editor starts `backstage_stage` from the same `target/` directory. The
 stage logs the GPU it picked, for example
@@ -65,8 +66,8 @@ Runtime files (the socket and frame rings) live in
 cleaned up the next time the editor starts.
 
 ## Checks
-`scripts/check.sh` runs formatting, clippy, all tests, and a headless UI
-smoke test. See [testing.md](testing.md).
+`scripts/check.sh` runs formatting, clippy, all tests, and the headless
+smoke tests for the editor and the player. See [testing.md](testing.md).
 
 ## Manual crash-recovery checks
 - **Kill Stage** button, or `pkill -9 -x backstage_stage`: the restart

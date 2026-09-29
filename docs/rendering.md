@@ -2,7 +2,8 @@
 
 ## Phase 1: tessellated vectors *(implemented, M1)*
 - **Input:** `backstage_core::evaluate`'s `Scene`. `Renderer::render` takes
-  a `Frame` holding the project, the scene, the scale, and the pointer.
+  a `Frame` holding the project, the scene, the scale, the pointer, and
+  the `Presentation` (editor or player).
 - **Tessellation:** lyon turns each `Shape` into one mesh. Fills use the
   non-zero rule; strokes use their width, caps, joins, and miter limit. The
   tolerance is 0.05 local units.

@@ -14,8 +14,13 @@ typed enough to give good editor tooling, and hot-reloadable.
 | **WASM guest modules** | Any source language, sandboxed, fast. | Heavy iteration loop. Awkward for small marker scripts. |
 
 ## Proposed path
-1. Define the **host API** first (display list, timeline control, events,
-   tweening) as a Rust trait surface that doesn't depend on any language.
+1. Define the **host API** first as a Rust trait surface that doesn't depend
+   on any language. It covers:
+   - navigating the object tree by instance path
+   - property overrides
+   - mixer control (`play`, `crossfade`)
+   - markers and events
+   - tweening
 2. Prototype on Rhai or Luau to test the API cheaply.
 3. Build the custom language against the same host API once its shape is
    settled.
