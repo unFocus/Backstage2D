@@ -199,6 +199,7 @@ dependencies = [
  "backstage_protocol",
  "gtk4",
  "relm4",
+ "serde",
  "serde_json",
  "thiserror 2.0.21",
 ]

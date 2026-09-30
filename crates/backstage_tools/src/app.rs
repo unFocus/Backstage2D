@@ -5,19 +5,36 @@ use crate::panels;
 use crate::smoke::{SmokeStep, SmokeTest};
 use crate::stage_view::StageView;
 use crate::supervisor::{StageEvent, Supervisor};
-use crate::working_copy::{CommitError, Recovery, WorkingCopy};
+use crate::working_copy::{self, CommitError, Recovery, SaveToError, WorkingCopy};
 use backstage_core::{Command, Entry, Project};
 use backstage_protocol::ToStage;
-use gtk::{gdk, glib, prelude::*};
+use gtk::{gdk, gio, glib, prelude::*};
+use relm4::actions::{AccelsPlus, RelmAction, RelmActionGroup};
 use relm4::prelude::*;
-use std::path::PathBuf;
+use std::cell::Cell;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-/// Project directory to edit; unset means the built-in sample. A stopgap
-/// until File → Open (M3).
+/// Project directory to open at startup; unset means the built-in sample.
 pub const PROJECT_ENV: &str = "BACKSTAGE_PROJECT";
 
+relm4::new_action_group!(WinActions, "win");
+relm4::new_stateless_action!(OpenAction, WinActions, "open");
+relm4::new_stateless_action!(SaveAction, WinActions, "save");
+relm4::new_stateless_action!(SaveAsAction, WinActions, "save-as");
+
+/// What to do once unsaved changes are dealt with.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Then {
+    Open,
+    Close,
+}
+
 pub struct App {
+    window: gtk::ApplicationWindow,
+    /// Set once the window may really close; its close request asks first.
+    may_close: Rc<Cell<bool>>,
     supervisor: Supervisor,
     /// The editor's copy of the document; `None` if the project didn't open.
     copy: Option<WorkingCopy>,
@@ -55,6 +72,21 @@ pub enum AppMsg {
     Redo,
     /// Debug edit until M4: move the first top-level node by this much.
     Nudge(f32, f32),
+    Open,
+    Save,
+    SaveAs,
+    /// The user picked where to Save As; then carry on with `Then`.
+    SaveTo(PathBuf, Option<Then>),
+    /// The user picked a project to open. `discard` drops the current
+    /// copy's unsaved edits (they chose Don't Save).
+    OpenPath {
+        path: PathBuf,
+        discard: bool,
+    },
+    CloseRequested,
+    /// Answer to "Save changes?": `None` is Cancel, `Some(true)` Save,
+    /// `Some(false)` Don't Save.
+    UnsavedAnswer(Then, Option<bool>),
 }
 
 #[relm4::component(pub)]
@@ -69,12 +101,21 @@ impl SimpleComponent for App {
             #[watch]
             set_title: Some(&model.title()),
             set_default_size: (1400, 900),
+            connect_close_request[sender, may_close] => move |_| {
+                if may_close.get() {
+                    glib::Propagation::Proceed
+                } else {
+                    sender.input(AppMsg::CloseRequested);
+                    glib::Propagation::Stop
+                }
+            },
 
             #[wrap(Some)]
             set_titlebar = &gtk::HeaderBar {
                 pack_start = &gtk::MenuButton {
                     set_icon_name: "open-menu-symbolic",
-                    set_tooltip_text: Some("Menu (not implemented)"),
+                    set_tooltip_text: Some("Menu"),
+                    set_menu_model: Some(&file_menu),
                 },
                 pack_start = &gtk::Button {
                     set_icon_name: "edit-undo-symbolic",
@@ -161,11 +202,15 @@ impl SimpleComponent for App {
 
     fn init(stage_binary: PathBuf, root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
         relm4::set_global_css(CSS);
-        let (copy, load_error) = match open_project() {
+        let startup = std::env::var_os(PROJECT_ENV).map(PathBuf::from);
+        let (copy, load_error) = match open_copy(startup.as_deref()) {
             Ok(copy) => (Some(copy), None),
             Err(e) => (None, Some(e)),
         };
+        let may_close = Rc::new(Cell::new(false));
         let mut model = App {
+            window: root.clone(),
+            may_close: may_close.clone(),
             supervisor: Supervisor::new(stage_binary),
             copy,
             stage_ready: false,
@@ -178,8 +223,13 @@ impl SimpleComponent for App {
             fps: 0,
         };
         let stage_view = &model.stage_view;
+        let file_menu = gio::Menu::new();
+        file_menu.append(Some("Open…"), Some("win.open"));
+        file_menu.append(Some("Save"), Some("win.save"));
+        file_menu.append(Some("Save As…"), Some("win.save-as"));
         let widgets = view_output!();
         root.add_controller(shortcuts(&sender));
+        register_file_actions(&root, &sender);
 
         let s = sender.clone();
         model.stage_view.connect_stage_resized(move |width, height, scale| {
@@ -208,6 +258,7 @@ impl SimpleComponent for App {
     }
 
     fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<()>) {
+        // Unsaved edits stay in the recovery directory.
         if let Some(copy) = self.copy.take() {
             copy.finish();
         }
@@ -230,6 +281,18 @@ impl SimpleComponent for App {
             AppMsg::Undo => self.submit(Entry::Undo),
             AppMsg::Redo => self.submit(Entry::Redo),
             AppMsg::Nudge(dx, dy) => self.update_nudge(dx, dy),
+            AppMsg::Open => self.check_unsaved(Then::Open, &sender),
+            AppMsg::Save => self.save(None, &sender),
+            AppMsg::SaveAs => self.save_as(None, &sender),
+            AppMsg::SaveTo(picked, then) => match working_copy::save_target(&picked) {
+                Ok(dir) => self.save_to(&dir, then, &sender),
+                Err(e) => self.alert("Could not save", &e),
+            },
+            AppMsg::OpenPath { path, discard } => self.open_path(&path, discard, &sender),
+            AppMsg::CloseRequested => self.check_unsaved(Then::Close, &sender),
+            AppMsg::UnsavedAnswer(_, None) => {}
+            AppMsg::UnsavedAnswer(then, Some(true)) => self.save(Some(then), &sender),
+            AppMsg::UnsavedAnswer(then, Some(false)) => self.proceed(then, true, &sender),
             AppMsg::Tick => {
                 self.fps = std::mem::take(&mut self.frames_this_second);
                 if self.health.is_stalled(Instant::now()) {
@@ -244,9 +307,139 @@ impl SimpleComponent for App {
 
 impl App {
     fn title(&self) -> String {
-        // Edits since opening live only in the recovery log until Save (M3).
-        let edited = self.copy.as_ref().is_some_and(|c| c.document().seq() > 0);
-        if edited { "Backstage2D •".into() } else { "Backstage2D".into() }
+        match &self.copy {
+            None => "Backstage2D".into(),
+            Some(c) if c.is_dirty() => format!("{} • — Backstage2D", c.display_name()),
+            Some(c) => format!("{} — Backstage2D", c.display_name()),
+        }
+    }
+
+    fn alert(&self, message: &str, detail: &str) {
+        eprintln!("{message}: {detail}");
+        gtk::AlertDialog::builder()
+            .message(message)
+            .detail(detail)
+            .modal(true)
+            .build()
+            .show(Some(&self.window));
+    }
+
+    /// Carries on with `then`, first asking to save if there are unsaved
+    /// changes.
+    fn check_unsaved(&mut self, then: Then, sender: &ComponentSender<Self>) {
+        let Some(copy) = self.copy.as_ref().filter(|c| c.is_dirty()) else {
+            return self.proceed(then, false, sender);
+        };
+        let dialog = gtk::AlertDialog::builder()
+            .message(format!("Save changes to “{}”?", copy.display_name()))
+            .detail("Your changes will be lost if you don't save them.")
+            .buttons(["Cancel", "Don't Save", "Save"])
+            .cancel_button(0)
+            .default_button(2)
+            .modal(true)
+            .build();
+        let s = sender.clone();
+        dialog.choose(Some(&self.window), None::<&gio::Cancellable>, move |answer| {
+            let answer = match answer {
+                Ok(2) => Some(true),
+                Ok(1) => Some(false),
+                _ => None,
+            };
+            s.input(AppMsg::UnsavedAnswer(then, answer));
+        });
+    }
+
+    /// Unsaved changes are dealt with: saved, or to be dropped if `discard`.
+    fn proceed(&mut self, then: Then, discard: bool, sender: &ComponentSender<Self>) {
+        match then {
+            Then::Open => {
+                let dialog = gtk::FileDialog::builder().title("Open Project").modal(true).build();
+                let s = sender.clone();
+                dialog.select_folder(Some(&self.window), None::<&gio::Cancellable>, move |picked| {
+                    if let Some(path) = picked.ok().and_then(|f| f.path()) {
+                        s.input(AppMsg::OpenPath { path, discard });
+                    }
+                });
+            }
+            Then::Close => {
+                if discard && let Some(copy) = self.copy.take() {
+                    copy.discard();
+                }
+                self.may_close.set(true);
+                self.window.close();
+            }
+        }
+    }
+
+    /// Replaces the document with the project at `path`, keeping the
+    /// running stage: it gets the new document with `Load`.
+    fn open_path(&mut self, path: &Path, discard: bool, sender: &ComponentSender<Self>) {
+        let mut copy = match open_copy(Some(path)) {
+            Ok(copy) => copy,
+            Err(e) => return self.alert("Could not open the project", &format!("{e:#}")),
+        };
+        self.banner = None;
+        self.stage_ready = false;
+        let load = copy.load_message();
+        match self.copy.replace(copy) {
+            Some(old) if discard => old.discard(),
+            Some(old) => old.finish(),
+            // Nothing opened at startup, so no stage is running yet.
+            None => return self.start_stage(sender, true),
+        }
+        // Commits for the old document may still arrive; the new copy
+        // ignores them until the stage reports this load.
+        self.supervisor.send(&load);
+    }
+
+    /// Save: to the project's path, or Save As if it has none.
+    fn save(&mut self, then: Option<Then>, sender: &ComponentSender<Self>) {
+        match self.copy.as_ref().map(|c| c.path().map(Path::to_owned)) {
+            None => {}
+            Some(Some(dir)) => self.save_to(&dir, then, sender),
+            Some(None) => self.save_as(then, sender),
+        }
+    }
+
+    fn save_as(&mut self, then: Option<Then>, sender: &ComponentSender<Self>) {
+        let Some(copy) = &self.copy else { return };
+        let dialog = gtk::FileDialog::builder()
+            .title("Save Project As")
+            .initial_name(format!("{}.{}", copy.display_name(), working_copy::PROJECT_EXTENSION))
+            .modal(true)
+            .build();
+        let s = sender.clone();
+        dialog.save(Some(&self.window), None::<&gio::Cancellable>, move |picked| {
+            // Cancelling also cancels whatever the save was for.
+            if let Some(path) = picked.ok().and_then(|f| f.path()) {
+                s.input(AppMsg::SaveTo(path, then));
+            }
+        });
+    }
+
+    fn save_to(&mut self, dir: &Path, then: Option<Then>, sender: &ComponentSender<Self>) {
+        let Some(copy) = self.copy.as_mut() else { return };
+        let result = copy.save_to(dir);
+        let saved = match result {
+            Ok(()) => true,
+            Err(SaveToError::AutosaveFailed(e)) => {
+                eprintln!("autosave failed: {e}");
+                self.banner = Some(format!("Autosave failed: {e}\nEdits from now on are only in memory."));
+                true
+            }
+            Err(e @ SaveToError::Project(_)) => {
+                self.alert("Could not save", &e.to_string());
+                false
+            }
+        };
+        if saved {
+            eprintln!("saved to {}", dir.display());
+            if let Some(then) = then {
+                self.proceed(then, false, sender);
+            }
+        }
+        let step = self.smoke.as_mut().and_then(|s| s.saved(saved));
+        self.run_smoke_step(step, sender);
     }
 
     /// Whether an edit can be sent now, and `f` allows it.
@@ -264,11 +457,15 @@ impl App {
         }
     }
 
-    fn run_smoke_step(&mut self, step: Option<SmokeStep>) {
+    fn run_smoke_step(&mut self, step: Option<SmokeStep>, sender: &ComponentSender<Self>) {
         match step {
             None => {}
             Some(SmokeStep::Nudge) => self.update_nudge(10.0, 0.0),
             Some(SmokeStep::Undo) => self.submit(Entry::Undo),
+            Some(SmokeStep::Save) => match self.copy.as_ref().and_then(|c| c.path().map(Path::to_owned)) {
+                Some(dir) => self.save_to(&dir, None, sender),
+                None => self.run_smoke_step(Some(SmokeStep::Fail("the project has no path".into())), sender),
+            },
             Some(SmokeStep::Kill) => self.supervisor.kill(),
             Some(SmokeStep::Pass) => {
                 self.supervisor.stop();
@@ -308,7 +505,7 @@ impl App {
                 self.status = format!("Stage pid {pid} · {adapter}");
                 // The new stage knows nothing yet: send it the document and
                 // the current view state.
-                if let Some(copy) = &self.copy {
+                if let Some(copy) = self.copy.as_mut() {
                     self.supervisor.send(&copy.load_message());
                 }
                 if let Some((width, height, scale)) = self.stage_view.stage_size() {
@@ -327,13 +524,13 @@ impl App {
                     self.stage_view.set_frame(texture.upcast());
                     self.frames_this_second += 1;
                     let step = self.smoke.as_mut().and_then(|s| s.frame(self.supervisor.session()));
-                    self.run_smoke_step(step);
+                    self.run_smoke_step(step, sender);
                 }
             }
             StageEvent::Alive => {}
             StageEvent::Log(line) => eprintln!("stage: {line}"),
             StageEvent::Loaded { seq, hash } => {
-                let Some(copy) = &self.copy else { return };
+                let Some(copy) = self.copy.as_mut() else { return };
                 let check = copy.check_loaded(seq, hash);
                 match &check {
                     Ok(()) => self.stage_ready = true,
@@ -347,14 +544,15 @@ impl App {
                 }
                 let step =
                     self.smoke.as_mut().and_then(|s| s.loaded(self.supervisor.session(), seq, check.is_ok()));
-                self.run_smoke_step(step);
+                self.run_smoke_step(step, sender);
             }
             StageEvent::Committed { seq, entry, .. } => {
                 let Some(copy) = self.copy.as_mut() else { return };
                 match copy.committed(seq, &entry) {
-                    Ok(()) => {
+                    Ok(false) => {} // for the document before an Open
+                    Ok(true) => {
                         let step = self.smoke.as_mut().and_then(|s| s.committed(seq));
-                        self.run_smoke_step(step);
+                        self.run_smoke_step(step, sender);
                     }
                     Err(CommitError::AutosaveFailed(e)) => {
                         eprintln!("autosave failed: {e}");
@@ -439,18 +637,31 @@ fn shortcuts(sender: &ComponentSender<App>) -> gtk::ShortcutController {
     controller
 }
 
-/// Opens the project to edit, from `BACKSTAGE_PROJECT` or the built-in
-/// sample, with autosave to a fresh recovery directory if one can be made.
-fn open_project() -> anyhow::Result<WorkingCopy> {
+/// Open…, Save, and Save As…, with their accelerators.
+fn register_file_actions(window: &gtk::ApplicationWindow, sender: &ComponentSender<App>) {
+    let mut group = RelmActionGroup::<WinActions>::new();
+    let s = sender.clone();
+    group.add_action(RelmAction::<OpenAction>::new_stateless(move |_| s.input(AppMsg::Open)));
+    let s = sender.clone();
+    group.add_action(RelmAction::<SaveAction>::new_stateless(move |_| s.input(AppMsg::Save)));
+    let s = sender.clone();
+    group.add_action(RelmAction::<SaveAsAction>::new_stateless(move |_| s.input(AppMsg::SaveAs)));
+    group.register_for_widget(window);
+    let app = relm4::main_application();
+    app.set_accelerators_for_action::<OpenAction>(&["<Control>o"]);
+    app.set_accelerators_for_action::<SaveAction>(&["<Control>s"]);
+    app.set_accelerators_for_action::<SaveAsAction>(&["<Control><Shift>s"]);
+}
+
+/// Opens the project in `dir`, or the built-in sample, with autosave to a
+/// fresh recovery directory if one can be made.
+fn open_copy(dir: Option<&Path>) -> anyhow::Result<WorkingCopy> {
     use anyhow::Context;
-    let project = match std::env::var_os(PROJECT_ENV) {
-        Some(dir) => {
-            let dir = PathBuf::from(dir);
-            backstage_core::load(&dir).with_context(|| format!("{}", dir.display()))?
-        }
+    let project = match dir {
+        Some(dir) => backstage_core::load(dir).with_context(|| format!("{}", dir.display()))?,
         None => backstage_core::sample::bounce(),
     };
-    let recovery = Recovery::default_dir().and_then(|dir| Recovery::create(dir, &project));
+    let recovery = Recovery::default_dir().and_then(|rdir| Recovery::create(rdir, &project, dir));
     let recovery = match recovery {
         Ok(recovery) => Some(recovery),
         Err(e) => {
@@ -458,7 +669,7 @@ fn open_project() -> anyhow::Result<WorkingCopy> {
             None
         }
     };
-    let copy = WorkingCopy::new(project, recovery)?;
+    let copy = WorkingCopy::new(project, dir.map(Path::to_owned), recovery)?;
     if let Some(dir) = copy.recovery_dir() {
         eprintln!("autosaving edits to {}", dir.display());
     }

@@ -49,10 +49,10 @@ The design is recorded in [ADR 0004](adr/0004-commands-and-document-authority.md
 - [x] ADR 0004: the command and document design
 - [x] Bump `PROTOCOL_VERSION` (now 2)
 
-### M3: editor panels on real data *(next)*
+### M3: editor panels on real data *(in progress)*
 - [ ] Timeline widget: one animation at a time, a row per node, and an animation picker. Scrubbing moves the stage's playhead. Time grid snapping.
 - [ ] Library, properties, and layers panels
-- [ ] Open and save files. Saving clears the recovery log.
+- [x] Open, Save, and Save As (project folders), with a prompt for unsaved changes. Saving marks the recovery log as saved rather than clearing it, so undo still works after a save.
 - [ ] Offer to restore unsaved edits from a recovery directory after an editor crash
 
 ### M4: on-stage editing

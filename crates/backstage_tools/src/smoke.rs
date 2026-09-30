@@ -1,7 +1,7 @@
 //! Self-driving smoke test for headless UI runs (`BACKSTAGE_SMOKE=1`). It
-//! runs M2's whole loop in the real editor, through the same paths as the
+//! runs the editing loop in the real editor, through the same paths as the
 //! user: wait for frames, nudge, kill the stage once the edit is committed,
-//! check the restarted stage replayed it, then undo and exit 0. See
+//! check the restarted stage replayed it, save, then undo and exit 0. See
 //! `tests/ui_smoke.rs`.
 //!
 //! The app calls the hooks below and carries out the [`SmokeStep`]s they
@@ -17,6 +17,7 @@ const FRAMES_PER_PHASE: u32 = 30;
 #[derive(Debug, PartialEq)]
 pub enum SmokeStep {
     Nudge,
+    Save,
     Undo,
     Kill,
     Pass,
@@ -33,6 +34,8 @@ enum Phase {
     AwaitReplay,
     /// Frames from the restarted stage.
     SecondFrames(u32),
+    /// Asked to save.
+    AwaitSave,
     /// Undid; waiting for the commit.
     AwaitUndo,
     Done,
@@ -71,9 +74,9 @@ impl SmokeTest {
                 if *n < FRAMES_PER_PHASE {
                     return None;
                 }
-                eprintln!("smoke: {n} frames from restarted session {session}, undoing");
-                self.phase = Phase::AwaitUndo;
-                Some(SmokeStep::Undo)
+                eprintln!("smoke: {n} frames from restarted session {session}, saving");
+                self.phase = Phase::AwaitSave;
+                Some(SmokeStep::Save)
             }
             _ => None,
         }
@@ -93,6 +96,18 @@ impl SmokeTest {
                 Some(SmokeStep::Pass)
             }
             (phase, seq) => Some(SmokeStep::Fail(format!("unexpected commit {seq} in phase {phase:?}"))),
+        }
+    }
+
+    /// A save finished; `ok` if the project was written.
+    pub fn saved(&mut self, ok: bool) -> Option<SmokeStep> {
+        match (&self.phase, ok) {
+            (Phase::AwaitSave, true) => {
+                eprintln!("smoke: saved, undoing");
+                self.phase = Phase::AwaitUndo;
+                Some(SmokeStep::Undo)
+            }
+            (phase, ok) => Some(SmokeStep::Fail(format!("unexpected save (ok: {ok}) in phase {phase:?}"))),
         }
     }
 
@@ -131,7 +146,8 @@ mod tests {
         // Nor do frames from the new stage before its replay checked out.
         assert_eq!(frames(&mut smoke, 2, FRAMES_PER_PHASE), []);
         assert_eq!(smoke.loaded(2, 1, true), None);
-        assert_eq!(frames(&mut smoke, 2, FRAMES_PER_PHASE), [SmokeStep::Undo]);
+        assert_eq!(frames(&mut smoke, 2, FRAMES_PER_PHASE), [SmokeStep::Save]);
+        assert_eq!(smoke.saved(true), Some(SmokeStep::Undo));
         assert_eq!(smoke.committed(2), Some(SmokeStep::Pass));
     }
 
@@ -147,8 +163,9 @@ mod tests {
     }
 
     #[test]
-    fn unexpected_commits_fail() {
+    fn unexpected_commits_or_saves_fail() {
         let mut smoke = SmokeTest::new();
         assert!(matches!(smoke.committed(1), Some(SmokeStep::Fail(_))));
+        assert!(matches!(smoke.saved(true), Some(SmokeStep::Fail(_))));
     }
 }

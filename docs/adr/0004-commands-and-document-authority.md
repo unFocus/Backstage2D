@@ -1,6 +1,7 @@
 # ADR 0004: Edit commands, the document log, and document authority
 
-**Status:** Accepted (2026-09-30). Implemented in M2.
+**Status:** Accepted (2026-09-30). Implemented in M2; §5 extended for
+Save and Open in M3 (2026-09-30).
 
 ## Context
 [ADR 0002](0002-stage-process-isolation.md) requires:
@@ -108,8 +109,26 @@ Reading it back (`read_recovery`) ignores a last line without its newline,
 since a crash cut it off. A disk error turns autosave off with a banner;
 editing continues from memory.
 
-On a clean exit the directory is removed only if it holds no edits. Until
-Save exists (M3), a directory with edits is the only copy of that work.
+It also holds `meta.ron`: `source` (the project's folder, if it has one)
+and `saved_seq` (how many log entries are saved there). It's written
+atomically when the directory is created and after every Save.
+
+**Saving marks the log; it doesn't clear it.** Truncating the log to a new
+base would drop the undo history with it: an `Undo` after the save
+couldn't be replayed. So the log and `base.bs2d/` stay as they are, the
+editor's `WorkingCopy`, `Load`, and the protocol are unchanged, and
+`meta.ron` records how far the save got.
+
+- **Dirty** means the project differs from the one last opened or saved,
+  so undoing back to the saved state is clean again.
+- **A clean exit** removes the directory unless the copy is dirty. "Don't
+  Save" removes it even then. A dirty directory is kept for the restore
+  prompt.
+- **File → Open keeps the stage:** the editor makes a new `WorkingCopy`
+  (with its own recovery directory) and sends its `Load` to the running
+  stage. A commit for the old document can still arrive before `Loaded`,
+  since the socket is ordered, so a copy ignores commits between sending
+  `Load` and accepting the `Loaded` it answers.
 
 ## Consequences
 - **Every future editing feature only produces entries:** timeline and
@@ -122,16 +141,17 @@ Save exists (M3), a directory with edits is the only copy of that work.
   reuse. If that shows up in profiles, it can be keyed by content instead.
 - **Two tests guard all of this end to end:**
   - `a_restarted_stage_replays_the_editors_log` (supervisor integration);
-  - the UI smoke test: edit, kill the stage, check the replay matches, then
-    undo in the real editor.
+  - the UI smoke test: edit, kill the stage, check the replay matches, save,
+    then undo in the real editor.
 
 ## Deferred
 - **Log growth:** compaction or checkpoints, which would need a `base_seq`
   in `Load`. There is no cap on the undo history yet.
 - **fsync cost:** batching it if M4 drags commit faster than per-entry
   fsync allows.
-- **Restoring after an editor crash:** the prompt, and Save clearing the log
-  (M3).
+- **Restoring after an editor crash:** the prompt (M3). It will offer
+  directories whose owner is gone and whose log has entries past
+  `saved_seq`.
 - **Old recovery directories:** a policy for cleaning them up.
 - **The arrow-key nudge:** a debug edit, removed once on-stage editing
   exists (M4).

@@ -188,7 +188,7 @@ fn a_restarted_stage_replays_the_editors_log() {
     setup();
     let nudge =
         |x| Entry::Do(Command::SetRest { comp: ids::STAGE, node: ids::GROUND, rest: Props::at(x, 0.0) });
-    let mut copy = WorkingCopy::new(backstage_core::sample::bounce(), None).unwrap();
+    let mut copy = WorkingCopy::new(backstage_core::sample::bounce(), None, None).unwrap();
     let mut sup = Supervisor::new(common::stage_binary());
 
     let (first, events) = start(&mut sup);
@@ -215,5 +215,55 @@ fn a_restarted_stage_replays_the_editors_log() {
     assert_eq!(
         copy.document().project().compositions[&ids::STAGE].nodes[&ids::GROUND].rest,
         Props::at(20.0, 0.0)
+    );
+}
+
+/// File → Open keeps the running stage and sends it the new document. A
+/// commit for the old document still in flight is ignored by the new copy,
+/// which takes commits again once the stage has loaded it.
+#[test]
+fn a_second_load_replaces_the_document() {
+    setup();
+    let nudge =
+        |x| Entry::Do(Command::SetRest { comp: ids::STAGE, node: ids::GROUND, rest: Props::at(x, 0.0) });
+    let mut old = WorkingCopy::new(backstage_core::sample::bounce(), None, None).unwrap();
+    let mut sup = Supervisor::new(common::stage_binary());
+    let (session, events) = start(&mut sup);
+    connected_pid(&events, session);
+    sup.send(&old.load_message());
+    let (seq, hash) = loaded(&events, session);
+    old.check_loaded(seq, hash).unwrap();
+    commit(&mut old, &sup, &events, session, nudge(10.0));
+
+    // Another project: the sample with the ground somewhere else.
+    let mut project = backstage_core::sample::bounce();
+    let Entry::Do(moved) = nudge(99.0) else { unreachable!() };
+    moved.apply(&mut project).unwrap();
+    let mut new = WorkingCopy::new(project, None, None).unwrap();
+
+    // An edit to the old document is in flight when the new one is sent.
+    sup.send(&old.submit(nudge(20.0)));
+    sup.send(&new.load_message());
+    let mut ignored = 0;
+    let (seq, hash) = wait_for(&events, |s, e| match e {
+        StageEvent::Committed { seq, entry, .. } if s == session => {
+            assert!(!new.committed(seq, &entry).unwrap(), "the old document's commit is ignored");
+            ignored += 1;
+            None
+        }
+        StageEvent::Loaded { seq, hash } if s == session => Some((seq, hash)),
+        _ => None,
+    });
+    assert_eq!((ignored, seq), (1, 0));
+    new.check_loaded(seq, hash).unwrap();
+    assert_eq!(commit(&mut new, &sup, &events, session, nudge(30.0)), 1);
+    assert_eq!(
+        new.document().project().compositions[&ids::STAGE].nodes[&ids::GROUND].rest,
+        Props::at(30.0, 0.0)
+    );
+    assert_eq!(commit(&mut new, &sup, &events, session, Entry::Undo), 2);
+    assert_eq!(
+        new.document().project().compositions[&ids::STAGE].nodes[&ids::GROUND].rest,
+        Props::at(99.0, 0.0)
     );
 }

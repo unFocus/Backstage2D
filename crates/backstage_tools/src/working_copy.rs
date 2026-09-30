@@ -3,11 +3,13 @@
 //! The stage is the only writer: the editor submits entries and applies
 //! only what the stage reports as committed, in sequence order. The copy
 //! keeps every committed entry, sends them all with `Load` when a stage
-//! (re)starts, and appends each one to a recovery log on disk. See
-//! `docs/adr/0002-stage-process-isolation.md`.
+//! (re)starts, and appends each one to a recovery log on disk. Saving writes
+//! the project and marks the recovery log as saved. See
+//! `docs/adr/0004-commands-and-document-authority.md`.
 
-use backstage_core::{Document, Entry, Project};
+use backstage_core::{Document, Entry, Project, SaveError};
 use backstage_protocol::{Snapshot, ToStage};
+use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -15,6 +17,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const BASE_DIR: &str = "base.bs2d";
 const LOG_FILE: &str = "log.ron";
+const META_FILE: &str = "meta.ron";
+/// A project directory's extension.
+pub const PROJECT_EXTENSION: &str = "bs2d";
 
 #[derive(Debug, thiserror::Error)]
 pub enum CommitError {
@@ -28,22 +33,48 @@ pub enum CommitError {
     AutosaveFailed(io::Error),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum SaveToError {
+    /// Nothing was saved; the copy still counts as unsaved.
+    #[error(transparent)]
+    Project(#[from] SaveError),
+    /// The project *was* saved, but marking the recovery log failed.
+    /// Autosave is off from here on.
+    #[error("saved, but autosave failed: {0}")]
+    AutosaveFailed(io::Error),
+}
+
 pub struct WorkingCopy {
     /// The project as opened, sent with every `Load`.
     base: Snapshot,
     /// Always `Document::replay(base, log)`.
     doc: Document,
     log: Vec<Entry>,
+    /// Where the project is saved; `None` until the first Save As.
+    path: Option<PathBuf>,
+    /// The project as last opened or saved.
+    saved: Project,
+    /// A `Load` was sent and its `Loaded` hasn't checked out yet. Commits
+    /// arriving meanwhile belong to the stage's previous document.
+    awaiting_load: bool,
     next_request: u64,
     recovery: Option<Recovery>,
 }
 
 impl WorkingCopy {
-    pub fn new(project: Project, recovery: Option<Recovery>) -> Result<Self, backstage_core::SaveError> {
+    /// `path` is where `project` was loaded from, if anywhere.
+    pub fn new(
+        project: Project,
+        path: Option<PathBuf>,
+        recovery: Option<Recovery>,
+    ) -> Result<Self, SaveError> {
         Ok(Self {
             base: Snapshot::of(&project)?,
+            saved: project.clone(),
             doc: Document::new(project),
             log: Vec::new(),
+            path,
+            awaiting_load: false,
             next_request: 1,
             recovery,
         })
@@ -53,14 +84,34 @@ impl WorkingCopy {
         &self.doc
     }
 
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    /// The project directory's name without its extension, or "Untitled".
+    pub fn display_name(&self) -> String {
+        self.path
+            .as_deref()
+            .and_then(Path::file_stem)
+            .map_or_else(|| "Untitled".to_owned(), |s| s.to_string_lossy().into_owned())
+    }
+
+    /// The project differs from the one last opened or saved. Undoing back
+    /// to the saved state makes it clean again.
+    pub fn is_dirty(&self) -> bool {
+        self.doc.project() != &self.saved
+    }
+
     /// The directory the log is autosaved to, if autosave is on.
     pub fn recovery_dir(&self) -> Option<&Path> {
         self.recovery.as_ref().map(|r| r.dir.as_path())
     }
 
     /// What to send a stage that just connected: the base and every
-    /// committed entry, so it rebuilds this exact document.
-    pub fn load_message(&self) -> ToStage {
+    /// committed entry, so it rebuilds this exact document. Commits are
+    /// ignored until [`check_loaded`](Self::check_loaded) accepts the reply.
+    pub fn load_message(&mut self) -> ToStage {
+        self.awaiting_load = true;
         ToStage::Load { base: self.base.clone(), log: self.log.clone() }
     }
 
@@ -72,8 +123,13 @@ impl WorkingCopy {
         ToStage::Submit { request, entry }
     }
 
-    /// Applies an entry the stage committed as `seq`.
-    pub fn committed(&mut self, seq: u64, entry: &Entry) -> Result<(), CommitError> {
+    /// Applies an entry the stage committed as `seq`. Returns `false` if it
+    /// was ignored because it belongs to the document the stage had before
+    /// the last `Load` (after Open, on the same stage).
+    pub fn committed(&mut self, seq: u64, entry: &Entry) -> Result<bool, CommitError> {
+        if self.awaiting_load {
+            return Ok(false);
+        }
         let expected = self.doc.seq() + 1;
         if seq != expected {
             return Err(CommitError::OutOfSync(format!("got entry {seq}, expected {expected}")));
@@ -89,13 +145,15 @@ impl WorkingCopy {
             self.recovery = None;
             return Err(CommitError::AutosaveFailed(e));
         }
-        Ok(())
+        Ok(true)
     }
 
-    /// Checks a restarted stage's `Loaded` against the copy.
-    pub fn check_loaded(&self, seq: u64, hash: u64) -> Result<(), String> {
+    /// Checks a (re)started stage's `Loaded` against the copy. Commits are
+    /// taken again once it matches.
+    pub fn check_loaded(&mut self, seq: u64, hash: u64) -> Result<(), String> {
         let (want_seq, want_hash) = (self.doc.seq(), self.doc.hash());
         if (seq, hash) == (want_seq, want_hash) {
+            self.awaiting_load = false;
             Ok(())
         } else {
             Err(format!(
@@ -104,20 +162,83 @@ impl WorkingCopy {
         }
     }
 
-    /// Clean exit. The recovery directory is removed only if it holds no
-    /// edits: until there is Save (M3), it is the only copy of that work.
-    pub fn finish(self) {
-        if let Some(recovery) = self.recovery
-            && self.log.is_empty()
+    /// Saves the project into `dir`, which becomes its path, and marks the
+    /// recovery log as saved up to here.
+    pub fn save_to(&mut self, dir: &Path) -> Result<(), SaveToError> {
+        backstage_core::save(self.doc.project(), dir)?;
+        self.path = Some(dir.to_owned());
+        self.saved = self.doc.project().clone();
+        let meta = RecoveryMeta { source: self.path.clone(), saved_seq: self.doc.seq() };
+        if let Some(recovery) = &self.recovery
+            && let Err(e) = recovery.write_meta(&meta)
         {
+            self.recovery = None;
+            return Err(SaveToError::AutosaveFailed(e));
+        }
+        Ok(())
+    }
+
+    /// Clean exit. The recovery directory is removed unless it holds
+    /// unsaved edits, which it keeps for the restore prompt.
+    pub fn finish(self) {
+        if !self.is_dirty() {
+            self.discard();
+        }
+    }
+
+    /// Closes the copy and removes its recovery directory, unsaved edits
+    /// included (the user chose not to save them).
+    pub fn discard(self) {
+        if let Some(recovery) = self.recovery {
             drop(recovery.log);
             let _ = fs::remove_dir_all(&recovery.dir);
         }
     }
 }
 
-/// The on-disk copy: `base.bs2d/` (the project as opened) plus `log.ron`,
-/// one committed entry per line.
+/// Where Save As should write, given the path the user picked: `.bs2d` is
+/// added if it's missing. The target must not exist yet, or be a project
+/// (or empty) directory the user chose to replace. A name that only exists
+/// once `.bs2d` is added is refused, since the dialog never asked about
+/// replacing it.
+pub fn save_target(picked: &Path) -> Result<PathBuf, String> {
+    let has_extension = picked.extension().is_some_and(|e| e == PROJECT_EXTENSION);
+    let target = if has_extension {
+        picked.to_owned()
+    } else {
+        let mut name = picked.file_name().ok_or("no file name given")?.to_owned();
+        name.push(format!(".{PROJECT_EXTENSION}"));
+        picked.with_file_name(name)
+    };
+    match fs::symlink_metadata(&target) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(target),
+        Err(e) => Err(format!("{}: {e}", target.display())),
+        Ok(_) if !has_extension => Err(format!("{} already exists", target.display())),
+        Ok(meta) if meta.is_dir() => {
+            let is_project = target.join("project.ron").is_file();
+            let is_empty = fs::read_dir(&target).map_err(|e| e.to_string())?.next().is_none();
+            if is_project || is_empty {
+                Ok(target)
+            } else {
+                Err(format!("{} is a folder that isn't a Backstage2D project", target.display()))
+            }
+        }
+        Ok(_) => Err(format!("{} is a file, not a project folder", target.display())),
+    }
+}
+
+/// `meta.ron` in a recovery directory: where the project lives, and how
+/// much of the log is already saved there.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RecoveryMeta {
+    /// The project's directory; `None` if it was never saved.
+    pub source: Option<PathBuf>,
+    /// The number of log entries whose result is saved at `source`.
+    pub saved_seq: u64,
+}
+
+/// The on-disk copy: `base.bs2d/` (the project as opened), `log.ron` (one
+/// committed entry per line), and `meta.ron`.
 pub struct Recovery {
     dir: PathBuf,
     log: File,
@@ -135,14 +256,26 @@ impl Recovery {
             }
         };
         let secs = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
-        Ok(state.join("backstage2d/recovery").join(format!("{}-{secs}", std::process::id())))
+        let dir = state.join("backstage2d/recovery").join(format!("{}-{secs}", std::process::id()));
+        // Opening a second project in the same second needs its own name.
+        let mut unique = dir.clone();
+        for n in 2.. {
+            if !unique.exists() {
+                break;
+            }
+            unique = dir.with_file_name(format!("{}-{secs}-{n}", std::process::id()));
+        }
+        Ok(unique)
     }
 
     /// Saves `project` as the base in `dir` and starts an empty log.
-    pub fn create(dir: PathBuf, project: &Project) -> io::Result<Self> {
+    /// `source` is where the project was opened from, if anywhere.
+    pub fn create(dir: PathBuf, project: &Project, source: Option<&Path>) -> io::Result<Self> {
         backstage_core::save(project, &dir.join(BASE_DIR)).map_err(io::Error::other)?;
-        let log = OpenOptions::new().create_new(true).append(true).open(dir.join(LOG_FILE))?;
-        Ok(Self { dir, log })
+        let recovery =
+            Self { log: OpenOptions::new().create_new(true).append(true).open(dir.join(LOG_FILE))?, dir };
+        recovery.write_meta(&RecoveryMeta { source: source.map(Path::to_owned), saved_seq: 0 })?;
+        Ok(recovery)
     }
 
     fn append(&mut self, entry: &Entry) -> io::Result<()> {
@@ -151,25 +284,51 @@ impl Recovery {
         self.log.write_all(line.as_bytes())?;
         self.log.sync_data()
     }
+
+    /// Replaces `meta.ron` atomically.
+    fn write_meta(&self, meta: &RecoveryMeta) -> io::Result<()> {
+        let mut text = backstage_core::io::to_ron_line(meta).map_err(io::Error::other)?;
+        text.push('\n');
+        let tmp = self.dir.join(format!("{META_FILE}.tmp"));
+        let mut file = File::create(&tmp)?;
+        file.write_all(text.as_bytes())?;
+        file.sync_all()?;
+        fs::rename(&tmp, self.dir.join(META_FILE))
+    }
 }
 
-/// Reads a recovery directory back: the base project and the committed
-/// entries. A last line without its newline was cut off by a crash and is
-/// ignored.
-pub fn read_recovery(dir: &Path) -> Result<(Project, Vec<Entry>), String> {
-    let project = backstage_core::load(&dir.join(BASE_DIR)).map_err(|e| e.to_string())?;
+/// A recovery directory read back.
+#[derive(Debug)]
+pub struct Recovered {
+    pub base: Project,
+    pub log: Vec<Entry>,
+    pub meta: RecoveryMeta,
+}
+
+/// Reads a recovery directory back. A last log line without its newline
+/// was cut off by a crash and is ignored. A directory from before
+/// `meta.ron` existed reads as never saved.
+pub fn read_recovery(dir: &Path) -> Result<Recovered, String> {
+    let base = backstage_core::load(&dir.join(BASE_DIR)).map_err(|e| e.to_string())?;
     let path = dir.join(LOG_FILE);
     let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let complete = match text.rfind('\n') {
         Some(end) => &text[..end],
         None => "",
     };
-    let entries = complete
+    let log = complete
         .lines()
         .enumerate()
         .map(|(i, line)| Entry::from_line(line).map_err(|e| format!("{}:{}: {e}", path.display(), i + 1)))
         .collect::<Result<_, _>>()?;
-    Ok((project, entries))
+    let meta_path = dir.join(META_FILE);
+    let meta = match fs::read_to_string(&meta_path) {
+        Ok(text) => backstage_core::io::from_ron_line(text.trim_end())
+            .map_err(|e| format!("{}: {e}", meta_path.display()))?,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => RecoveryMeta::default(),
+        Err(e) => return Err(format!("{}: {e}", meta_path.display())),
+    };
+    Ok(Recovered { base, log, meta })
 }
 
 #[cfg(test)]
@@ -196,8 +355,8 @@ mod tests {
 
     fn with_recovery() -> (WorkingCopy, PathBuf) {
         let dir = tempdir();
-        let recovery = Recovery::create(dir.clone(), &sample::bounce()).unwrap();
-        (WorkingCopy::new(sample::bounce(), Some(recovery)).unwrap(), dir)
+        let recovery = Recovery::create(dir.clone(), &sample::bounce(), None).unwrap();
+        (WorkingCopy::new(sample::bounce(), None, Some(recovery)).unwrap(), dir)
     }
 
     fn log_text(dir: &Path) -> String {
@@ -213,8 +372,8 @@ mod tests {
         }
         assert_eq!(copy.document(), &Document::replay(sample::bounce(), &log).unwrap());
         assert_eq!(log_text(&dir).lines().count(), 3);
-        let (project, entries) = read_recovery(&dir).unwrap();
-        assert_eq!(&Document::replay(project, &entries).unwrap(), copy.document());
+        let recovered = read_recovery(&dir).unwrap();
+        assert_eq!(&Document::replay(recovered.base, &recovered.log).unwrap(), copy.document());
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -233,7 +392,7 @@ mod tests {
 
     #[test]
     fn load_carries_the_base_and_every_commit() {
-        let mut copy = WorkingCopy::new(sample::bounce(), None).unwrap();
+        let mut copy = WorkingCopy::new(sample::bounce(), None, None).unwrap();
         copy.committed(1, &nudge(1.0)).unwrap();
         copy.committed(2, &Entry::Undo).unwrap();
         let ToStage::Load { base, log } = copy.load_message() else { panic!() };
@@ -243,7 +402,7 @@ mod tests {
 
     #[test]
     fn check_loaded_compares_seq_and_hash() {
-        let mut copy = WorkingCopy::new(sample::bounce(), None).unwrap();
+        let mut copy = WorkingCopy::new(sample::bounce(), None, None).unwrap();
         copy.committed(1, &nudge(1.0)).unwrap();
         let hash = copy.document().hash();
         assert_eq!(copy.check_loaded(1, hash), Ok(()));
@@ -253,7 +412,7 @@ mod tests {
 
     #[test]
     fn requests_get_increasing_ids() {
-        let mut copy = WorkingCopy::new(sample::bounce(), None).unwrap();
+        let mut copy = WorkingCopy::new(sample::bounce(), None, None).unwrap();
         let ids: Vec<_> = (0..3)
             .map(|_| match copy.submit(Entry::Undo) {
                 ToStage::Submit { request, .. } => request,
@@ -272,7 +431,7 @@ mod tests {
         let good = log_text(&dir);
 
         fs::write(&path, format!("{good}Do(SetRest(comp:")).unwrap();
-        assert_eq!(read_recovery(&dir).unwrap().1, vec![nudge(1.0)]);
+        assert_eq!(read_recovery(&dir).unwrap().log, vec![nudge(1.0)]);
 
         fs::write(&path, format!("{good}Nonsense\n")).unwrap();
         let err = read_recovery(&dir).unwrap_err();
@@ -281,7 +440,7 @@ mod tests {
     }
 
     #[test]
-    fn finish_keeps_the_directory_only_if_it_holds_edits() {
+    fn finish_keeps_the_directory_only_if_it_holds_unsaved_edits() {
         let (copy, dir) = with_recovery();
         copy.finish();
         assert!(!dir.exists());
@@ -290,6 +449,99 @@ mod tests {
         copy.committed(1, &nudge(1.0)).unwrap();
         copy.finish();
         assert!(dir.join(LOG_FILE).exists());
+        fs::remove_dir_all(dir).unwrap();
+
+        // Undone back to the saved state: nothing to keep.
+        let (mut copy, dir) = with_recovery();
+        copy.committed(1, &nudge(1.0)).unwrap();
+        copy.committed(2, &Entry::Undo).unwrap();
+        copy.finish();
+        assert!(!dir.exists());
+
+        let (mut copy, dir) = with_recovery();
+        copy.committed(1, &nudge(1.0)).unwrap();
+        copy.discard();
+        assert!(!dir.exists(), "discard drops unsaved edits");
+    }
+
+    #[test]
+    fn saving_writes_the_project_and_marks_the_log() {
+        let (mut copy, dir) = with_recovery();
+        let target = tempdir().join("saved.bs2d");
+        assert_eq!(copy.display_name(), "Untitled");
+        copy.committed(1, &nudge(1.0)).unwrap();
+        assert!(copy.is_dirty());
+
+        copy.save_to(&target).unwrap();
+        assert!(!copy.is_dirty());
+        assert_eq!(copy.path(), Some(target.as_path()));
+        assert_eq!(copy.display_name(), "saved");
+        assert_eq!(&backstage_core::load(&target).unwrap(), copy.document().project());
+        let meta = read_recovery(&dir).unwrap().meta;
+        assert_eq!(meta, RecoveryMeta { source: Some(target.clone()), saved_seq: 1 });
+
+        // Undo is still possible after a save, and makes the copy dirty.
+        copy.committed(2, &Entry::Undo).unwrap();
+        assert!(copy.is_dirty());
+        let recovered = read_recovery(&dir).unwrap();
+        assert_eq!(&Document::replay(recovered.base, &recovered.log).unwrap(), copy.document());
+        copy.committed(3, &Entry::Redo).unwrap();
+        assert!(!copy.is_dirty(), "back at the saved state");
+
+        // Saved with no later edits: nothing left to recover.
+        copy.finish();
+        assert!(!dir.exists());
+        fs::remove_dir_all(target.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_new_recovery_directory_records_its_source() {
+        let dir = tempdir();
+        let source = PathBuf::from("/somewhere/x.bs2d");
+        Recovery::create(dir.clone(), &sample::bounce(), Some(&source)).unwrap();
+        assert_eq!(read_recovery(&dir).unwrap().meta, RecoveryMeta { source: Some(source), saved_seq: 0 });
+
+        // Directories from before meta.ron read as never saved.
+        fs::remove_file(dir.join(META_FILE)).unwrap();
+        assert_eq!(read_recovery(&dir).unwrap().meta, RecoveryMeta::default());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn commits_wait_for_the_loaded_check_after_a_load() {
+        let mut copy = WorkingCopy::new(sample::bounce(), None, None).unwrap();
+        copy.load_message();
+        // A commit for the stage's previous document, still in flight.
+        assert!(!copy.committed(7, &nudge(1.0)).unwrap());
+        assert_eq!(copy.document().seq(), 0);
+        let hash = copy.document().hash();
+        copy.check_loaded(0, hash).unwrap();
+        assert!(copy.committed(1, &nudge(1.0)).unwrap());
+        assert_eq!(copy.document().seq(), 1);
+    }
+
+    #[test]
+    fn save_target_adds_the_extension_and_refuses_other_things() {
+        let dir = tempdir();
+        fs::create_dir_all(&dir).unwrap();
+        let ext = |name: &str| dir.join(name);
+
+        assert_eq!(save_target(&ext("new")), Ok(ext("new.bs2d")));
+        assert_eq!(save_target(&ext("new.bs2d")), Ok(ext("new.bs2d")));
+
+        backstage_core::save(&sample::bounce(), &ext("old.bs2d")).unwrap();
+        assert_eq!(save_target(&ext("old.bs2d")), Ok(ext("old.bs2d")), "replacing a project");
+        assert!(save_target(&ext("old")).unwrap_err().contains("already exists"), "never asked to replace");
+
+        fs::create_dir(ext("empty.bs2d")).unwrap();
+        assert_eq!(save_target(&ext("empty.bs2d")), Ok(ext("empty.bs2d")));
+
+        fs::create_dir(ext("photos.bs2d")).unwrap();
+        fs::write(ext("photos.bs2d/cat.jpg"), "").unwrap();
+        assert!(save_target(&ext("photos.bs2d")).unwrap_err().contains("isn't a Backstage2D project"));
+
+        fs::write(ext("file.bs2d"), "").unwrap();
+        assert!(save_target(&ext("file.bs2d")).unwrap_err().contains("is a file"));
         fs::remove_dir_all(dir).unwrap();
     }
 
