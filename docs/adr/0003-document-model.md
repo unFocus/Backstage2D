@@ -123,7 +123,8 @@ settled.
     that painless.
   - `Bitmap`: an image asset.
   - `Instance`: a nested composition. See *time modes* below.
-  - `Mask`: its children clip the next siblings (details in M2).
+  - `Mask`: its children clip the next siblings (details when masks are
+    rendered).
   - `Text`: later.
 - **Animation** (the timeline): a name, a duration, a loop mode (`Once`,
   `Loop`, or `PingPong`), an optional `step`, **tracks**, and **markers**
@@ -261,7 +262,8 @@ pub struct Time(pub i64); // flicks
   It gets property tests: evaluating at the same time twice gives the same
   result, loop and animation boundaries behave correctly, easing endpoints
   are exact, and blending one animation at weight 1 reproduces it exactly.
-- Commands (M2) edit `Project` by ID. Undo inverts them.
+- Commands edit `Project` by ID, and undo inverts them. See
+  [ADR 0004](0004-commands-and-document-authority.md).
 - The editor's timeline shows **one animation at a time**, with one row per
   node (like Flash's layer rows) and keys on that node's property tracks. An
   animation picker switches between them, like Rive and Spine.

@@ -37,7 +37,8 @@ defined in [ADR 0003](adr/0003-document-model.md).
 - [x] Sample project (in the repo) and golden images of it
 - [x] `backstage_player`: a winit + wgpu window that plays a project (Space pauses, F fullscreen)
 
-### M2: edit commands and crash recovery with no lost work *(next)*
+### M2: edit commands and crash recovery with no lost work *(done)*
+The design is recorded in [ADR 0004](adr/0004-commands-and-document-authority.md).
 - [x] `Command` type in core: apply returns the inverse, failures change nothing, results stay valid
 - [x] Undo/redo log: `Document` (project, history, sequence number) changed only by `Entry`s (do, undo, redo), replay, and a document hash
 - [x] Protocol: document snapshot on connect, edit commands in both directions
@@ -45,13 +46,14 @@ defined in [ADR 0003](adr/0003-document-model.md).
 - [x] The editor keeps a copy of the document and autosaves the command log (restoring it after an editor crash is part of M3's Open/Save)
 - [x] On a stage restart, the editor sends the snapshot and replays the log. Test: replay gives an identical document (`a_restarted_stage_replays_the_editors_log`)
 - [x] Undo/Redo and a temporary debug edit in the editor, exercised by the UI smoke test
-- [ ] ADR 0004: the command and document design
+- [x] ADR 0004: the command and document design
 - [x] Bump `PROTOCOL_VERSION` (now 2)
 
-### M3: editor panels on real data
+### M3: editor panels on real data *(next)*
 - [ ] Timeline widget: one animation at a time, a row per node, and an animation picker. Scrubbing moves the stage's playhead. Time grid snapping.
 - [ ] Library, properties, and layers panels
-- [ ] Open and save files
+- [ ] Open and save files. Saving clears the recovery log.
+- [ ] Offer to restore unsaved edits from a recovery directory after an editor crash
 
 ### M4: on-stage editing
 - [ ] Hit testing, selection, bounding boxes, transform handles, all drawn by the engine. Spatial grid snapping.

@@ -5,13 +5,13 @@
 ```
  tools process                           stage process (restartable)
 ┌──────────────────────┐    protocol     ┌──────────────────────────────┐
-│ backstage_tools      │ ──commands────> │ backstage_stage              │
-│  GTK 4 + Relm4       │ ──queries─────> │  document (edit authority)   │
-│  timeline, library,  │ <──committed─── │  evaluate + renderer         │
-│  properties panels   │    commands     │  on-stage edit hooks (M4):   │
-│  document copy +     │ <──frames────── │   selection, bounds, bezier, │
-│  autosave journal    │    (opt. B/C)   │   transform, snapping        │
-└─────────┬────────────┘                 └─────────────┬────────────────┘
+│ backstage_tools      │ ──Load───────>  │ backstage_stage              │
+│  GTK 4 + Relm4       │   (base + log)  │  document (single writer)    │
+│  timeline, library,  │ ──Submit─────>  │  evaluate + renderer         │
+│  properties panels   │ <──Loaded─────  │  on-stage edit hooks (M4):   │
+│  document copy +     │ <──Committed──  │   selection, bounds, bezier, │
+│  recovery log        │ <──frames─────  │   transform, snapping        │
+└─────────┬────────────┘    (opt. B/C)   └─────────────┬────────────────┘
           │                                            │
           └──> backstage_core, backstage_protocol <────┘
 
@@ -19,16 +19,18 @@
 ```
 
 See [ADR 0002](adr/0002-stage-process-isolation.md) for how the processes
-are split and how state is copied between them.
+are split, and [ADR 0004](adr/0004-commands-and-document-authority.md) for
+how edits flow between them.
 
 **Built so far:**
 - The process split, supervision, and crash/hang recovery.
 - Shared-memory frames, and the stage rendering the evaluated project.
 - The standalone player.
+- Edit commands with undo/redo: the stage commits them, the editor keeps a
+  copy and autosaves the log, and a restarted stage replays it (M2).
 
-**Still to come:** commands flowing between the processes and the editor's
-document copy (M2), and the on-stage edit hooks (M4). Until then, the stage
-shows a project loaded from disk, or the built-in sample.
+**Still to come:** editor panels on the real document, and Open/Save (M3);
+the on-stage edit hooks (M4).
 
 Rules:
 1. `backstage_core` has **no** GPU, windowing, or GUI dependencies. It can be
@@ -45,7 +47,8 @@ Rules:
    player) never depend on `backstage_tools` or on GTK/Relm4. Check with
    `cargo tree -p backstage_tools` and `cargo tree -p backstage_stage`.
 6. The stage decides the order of edits. The tools process keeps a copy of
-   every committed change, so a stage crash never loses committed work.
+   every committed change, so a stage crash never loses committed work. It
+   sends edits only to a stage whose replay matched its copy (ADR 0004).
 7. User scripts never run in the editing stage. They run in the player
    process (Test Movie).
 
@@ -59,6 +62,10 @@ Defined in [ADR 0003](adr/0003-document-model.md):
   on-stage tools all consume it.
 - The runtime state (mixers, free-running clocks, script overrides) is small,
   data-oriented, and serializable.
+- Edits are **commands** (`backstage_core::Command`) whose `apply` returns
+  the inverse. A **`Document`** wraps the project with its undo/redo history
+  and a sequence number, and changes only through log entries (`Do`,
+  `Undo`, `Redo`). See [ADR 0004](adr/0004-commands-and-document-authority.md).
 
 ## Frame loop (player / stage)
 Runs at the display's refresh rate (optionally capped). Nothing in the

@@ -6,6 +6,7 @@ changing anything architectural.
 - ADR 0001: GTK 4 + Relm4.
 - ADR 0002: the stage and tools process split.
 - ADR 0003: the document model, the evaluated scene, and time.
+- ADR 0004: edit commands, the document log, and document authority.
 
 ## Environment
 - **Dev host:** Bazzite (immutable Fedora 44), KDE on Wayland, AMD RX 6800.
@@ -66,6 +67,16 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
   `#[serde(with = "ron_text")]` or a `Snapshot` (the project's files).
 - `evaluate` must stay pure and deterministic. An empty `RuntimeState` is
   valid.
+
+## Editing conventions (ADR 0004)
+- **Every edit is an `Entry`** (`Do(Command)`, `Undo`, `Redo`) that the
+  stage commits. The editor never changes its `WorkingCopy` directly; it
+  submits and applies only `Committed` entries.
+- **Commands never generate IDs.** The caller picks them, so replay is
+  deterministic.
+- **A new command needs:** an exact inverse (the round-trip tests compare
+  whole projects), lookups before any change, and a case in the
+  random-edit proptest picker (`backstage_core/src/test_util.rs`).
 
 ## How we work
 - **Plan each step first** (plan mode), get approval, then build. Keep steps

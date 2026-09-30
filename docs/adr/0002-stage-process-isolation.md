@@ -2,10 +2,10 @@
 
 **Status:** Accepted.
 - **Implemented:** the process split, crash recovery, and display option B
-  (M0.5). The stage rendering the real project (M1). The stage as the
-  document's single writer (M2).
-- **Still to build:** the editor's copy of the document and command replay
-  after a restart (M2), and the edit hooks (M4).
+  (M0.5). The stage rendering the real project (M1). Document authority,
+  the editor's copy, and command replay after a restart (M2, see
+  [ADR 0004](0004-commands-and-document-authority.md)).
+- **Still to build:** the query hooks and the on-stage edit hooks (M3/M4).
 
 ## Terms
 - **Stage (engine):** the `backstage_stage` process. It renders the display

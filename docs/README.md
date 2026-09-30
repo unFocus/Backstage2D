@@ -13,3 +13,4 @@
   - [0001: GUI framework](adr/0001-gui-framework.md)
   - [0002: Stage process isolation](adr/0002-stage-process-isolation.md)
   - [0003: Document model, scene model, and time](adr/0003-document-model.md)
+  - [0004: Edit commands, the document log, and document authority](adr/0004-commands-and-document-authority.md)
