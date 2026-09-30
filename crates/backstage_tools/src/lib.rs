@@ -10,3 +10,4 @@ pub mod panels;
 pub mod smoke;
 pub mod stage_view;
 pub mod supervisor;
+pub mod working_copy;

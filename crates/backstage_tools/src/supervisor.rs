@@ -3,6 +3,7 @@
 //! Each start is a new *session*. Events from older sessions are tagged with
 //! their session number so the UI can ignore them after a restart.
 
+use backstage_core::Entry;
 use backstage_protocol::{FrameRing, PROTOCOL_VERSION, ToStage, ToTools, read_message, write_message};
 use gtk::glib;
 use relm4::gtk;
@@ -31,6 +32,23 @@ pub enum StageEvent {
     FrameAvailable,
     Alive,
     Log(String),
+    /// The stage finished `Load`: see `ToTools::Loaded`.
+    Loaded {
+        seq: u64,
+        hash: u64,
+    },
+    /// The stage applied an entry: see `ToTools::Committed`.
+    Committed {
+        seq: u64,
+        request: Option<u64>,
+        /// Boxed: entries are large, and events are passed around by value.
+        entry: Box<Entry>,
+    },
+    /// The stage refused a submitted entry.
+    Rejected {
+        request: u64,
+        reason: String,
+    },
     Exited(String),
 }
 
@@ -223,8 +241,11 @@ fn run_session(
             }
             ToTools::Heartbeat => emit(StageEvent::Alive),
             ToTools::Log(line) => emit(StageEvent::Log(line)),
-            // Document messages: the editor doesn't keep a copy yet (M2 step 5).
-            ToTools::Loaded { .. } | ToTools::Committed { .. } | ToTools::Rejected { .. } => {}
+            ToTools::Loaded { seq, hash } => emit(StageEvent::Loaded { seq, hash }),
+            ToTools::Committed { seq, request, entry } => {
+                emit(StageEvent::Committed { seq, request, entry: Box::new(entry) })
+            }
+            ToTools::Rejected { request, reason } => emit(StageEvent::Rejected { request, reason }),
         }
     }
 }

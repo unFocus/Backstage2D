@@ -200,6 +200,7 @@ dependencies = [
  "gtk4",
  "relm4",
  "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

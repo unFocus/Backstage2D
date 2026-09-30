@@ -65,6 +65,14 @@ Runtime files (the socket and frame rings) live in
 `$XDG_RUNTIME_DIR/backstage2d/`. Files left by processes that died are
 cleaned up the next time the editor starts.
 
+Every committed edit is autosaved to
+`$XDG_STATE_HOME/backstage2d/recovery/<pid>-<unix time>/` (usually under
+`~/.local/state`): `base.bs2d/` is the project as opened and `log.ron` holds
+one edit per line. The editor prints the directory at startup. A clean exit
+removes it only if it holds no edits; until Save exists (M3), a directory
+with edits is the only copy of that work. Restoring it from the editor also
+comes with M3.
+
 ## Checks
 `scripts/check.sh` runs formatting, clippy, all tests, and the headless
 smoke tests for the editor and the player. See [testing.md](testing.md).

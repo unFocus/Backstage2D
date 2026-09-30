@@ -3,8 +3,11 @@
 
 mod common;
 
+use backstage_core::sample::ids;
+use backstage_core::{Command, Entry, Props};
 use backstage_protocol::{Snapshot, ToStage};
 use backstage_tools::supervisor::{self, StageEvent, Supervisor};
+use backstage_tools::working_copy::WorkingCopy;
 use std::path::Path;
 use std::sync::Once;
 use std::sync::mpsc::{Receiver, channel};
@@ -151,4 +154,66 @@ fn stale_files_from_dead_processes_are_swept() {
     }
     assert!(dir.join(&live).exists(), "files of live processes must be kept");
     std::fs::remove_file(dir.join(live)).unwrap();
+}
+
+/// Applies the `Committed` event for `request` (from `session`) to `copy`.
+fn commit(copy: &mut WorkingCopy, sup: &Supervisor, events: &Events, session: u64, entry: Entry) -> u64 {
+    let ToStage::Submit { request, .. } = copy.submit(entry.clone()) else { unreachable!() };
+    sup.send(&ToStage::Submit { request, entry });
+    let (seq, entry) = wait_for(events, |s, e| match e {
+        StageEvent::Committed { seq, request: Some(r), entry } if s == session && r == request => {
+            Some((seq, entry))
+        }
+        StageEvent::Rejected { request: r, reason } if s == session && r == request => {
+            panic!("rejected: {reason}")
+        }
+        _ => None,
+    });
+    copy.committed(seq, &entry).unwrap();
+    seq
+}
+
+fn loaded(events: &Events, session: u64) -> (u64, u64) {
+    wait_for(events, |s, e| match e {
+        StageEvent::Loaded { seq, hash } if s == session => Some((seq, hash)),
+        _ => None,
+    })
+}
+
+/// M2's promise: edits survive a stage crash. The editor's copy follows the
+/// stage's commits; after a kill, the restarted stage replays the copy's
+/// log into an identical document and carries on numbering from there.
+#[test]
+fn a_restarted_stage_replays_the_editors_log() {
+    setup();
+    let nudge =
+        |x| Entry::Do(Command::SetRest { comp: ids::STAGE, node: ids::GROUND, rest: Props::at(x, 0.0) });
+    let mut copy = WorkingCopy::new(backstage_core::sample::bounce(), None).unwrap();
+    let mut sup = Supervisor::new(common::stage_binary());
+
+    let (first, events) = start(&mut sup);
+    connected_pid(&events, first);
+    sup.send(&copy.load_message());
+    let (seq, hash) = loaded(&events, first);
+    copy.check_loaded(seq, hash).unwrap();
+    for entry in [nudge(10.0), nudge(20.0), Entry::Undo] {
+        commit(&mut copy, &sup, &events, first, entry);
+    }
+
+    sup.kill();
+    wait_for(&events, |s, e| (s == first && matches!(e, StageEvent::Exited(_))).then_some(()));
+    sup.reap();
+
+    let (second, events) = start(&mut sup);
+    connected_pid(&events, second);
+    sup.send(&copy.load_message());
+    let (seq, hash) = loaded(&events, second);
+    assert_eq!(seq, 3);
+    copy.check_loaded(seq, hash).unwrap();
+    // The history came through too: redo works on the new stage.
+    assert_eq!(commit(&mut copy, &sup, &events, second, Entry::Redo), 4);
+    assert_eq!(
+        copy.document().project().compositions[&ids::STAGE].nodes[&ids::GROUND].rest,
+        Props::at(20.0, 0.0)
+    );
 }

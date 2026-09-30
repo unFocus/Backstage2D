@@ -5,7 +5,8 @@ use crate::panels;
 use crate::smoke::SmokeTest;
 use crate::stage_view::StageView;
 use crate::supervisor::{StageEvent, Supervisor};
-use backstage_protocol::{Snapshot, ToStage};
+use crate::working_copy::{CommitError, Recovery, WorkingCopy};
+use backstage_protocol::ToStage;
 use gtk::{gdk, glib, prelude::*};
 use relm4::prelude::*;
 use std::path::PathBuf;
@@ -17,8 +18,8 @@ pub const PROJECT_ENV: &str = "BACKSTAGE_PROJECT";
 
 pub struct App {
     supervisor: Supervisor,
-    /// The document sent to every stage when it connects.
-    base: Option<Snapshot>,
+    /// The editor's copy of the document; `None` if the project didn't open.
+    copy: Option<WorkingCopy>,
     stage_view: StageView,
     health: StageHealth,
     smoke: Option<SmokeTest>,
@@ -137,13 +138,13 @@ impl SimpleComponent for App {
 
     fn init(stage_binary: PathBuf, root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
         relm4::set_global_css(CSS);
-        let (base, load_error) = match load_base() {
-            Ok(base) => (Some(base), None),
+        let (copy, load_error) = match open_project() {
+            Ok(copy) => (Some(copy), None),
             Err(e) => (None, Some(e)),
         };
         let mut model = App {
             supervisor: Supervisor::new(stage_binary),
-            base,
+            copy,
             stage_view: StageView::default(),
             health: StageHealth::new(Instant::now()),
             smoke: SmokeTest::from_env(),
@@ -179,6 +180,12 @@ impl SimpleComponent for App {
         }
 
         ComponentParts { model, widgets }
+    }
+
+    fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<()>) {
+        if let Some(copy) = self.copy.take() {
+            copy.finish();
+        }
     }
 
     fn update(&mut self, msg: AppMsg, sender: ComponentSender<Self>) {
@@ -228,8 +235,8 @@ impl App {
                 self.status = format!("Stage pid {pid} · {adapter}");
                 // The new stage knows nothing yet: send it the document and
                 // the current view state.
-                if let Some(base) = &self.base {
-                    self.supervisor.send(&ToStage::Load { base: base.clone(), log: Vec::new() });
+                if let Some(copy) = &self.copy {
+                    self.supervisor.send(&copy.load_message());
                 }
                 if let Some((width, height, scale)) = self.stage_view.stage_size() {
                     self.supervisor.send(&ToStage::Resize { width, height, scale });
@@ -253,6 +260,35 @@ impl App {
             }
             StageEvent::Alive => {}
             StageEvent::Log(line) => eprintln!("stage: {line}"),
+            StageEvent::Loaded { seq, hash } => {
+                let Some(copy) = &self.copy else { return };
+                if let Err(e) = copy.check_loaded(seq, hash) {
+                    // Replaying again would give the same result, so warn
+                    // instead of restarting. The editor's copy stays the
+                    // reference.
+                    eprintln!("stage document differs from the editor's: {e}");
+                    self.banner = Some(format!("The stage's document differs from the editor's.\n{e}"));
+                }
+            }
+            StageEvent::Committed { seq, entry, .. } => {
+                let Some(copy) = self.copy.as_mut() else { return };
+                match copy.committed(seq, &entry) {
+                    Ok(()) => {}
+                    Err(CommitError::AutosaveFailed(e)) => {
+                        eprintln!("autosave failed: {e}");
+                        self.banner =
+                            Some(format!("Autosave failed: {e}\nEdits since then are only in memory."));
+                    }
+                    Err(e @ CommitError::OutOfSync(_)) => {
+                        // Restart the stage; it replays the editor's log.
+                        eprintln!("{e}");
+                        self.supervisor.kill();
+                    }
+                }
+            }
+            StageEvent::Rejected { request, reason } => {
+                eprintln!("stage rejected request {request}: {reason}")
+            }
             StageEvent::Exited(reason) => {
                 self.supervisor.reap();
                 self.stage_view.clear_frame();
@@ -273,8 +309,9 @@ impl App {
     }
 }
 
-/// The project to edit, from `BACKSTAGE_PROJECT` or the built-in sample.
-fn load_base() -> anyhow::Result<Snapshot> {
+/// Opens the project to edit, from `BACKSTAGE_PROJECT` or the built-in
+/// sample, with autosave to a fresh recovery directory if one can be made.
+fn open_project() -> anyhow::Result<WorkingCopy> {
     use anyhow::Context;
     let project = match std::env::var_os(PROJECT_ENV) {
         Some(dir) => {
@@ -283,7 +320,19 @@ fn load_base() -> anyhow::Result<Snapshot> {
         }
         None => backstage_core::sample::bounce(),
     };
-    Ok(Snapshot::of(&project)?)
+    let recovery = Recovery::default_dir().and_then(|dir| Recovery::create(dir, &project));
+    let recovery = match recovery {
+        Ok(recovery) => Some(recovery),
+        Err(e) => {
+            eprintln!("autosave is off: cannot create a recovery directory: {e}");
+            None
+        }
+    };
+    let copy = WorkingCopy::new(project, recovery)?;
+    if let Some(dir) = copy.recovery_dir() {
+        eprintln!("autosaving edits to {}", dir.display());
+    }
+    Ok(copy)
 }
 
 const CSS: &str = "

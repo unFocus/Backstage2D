@@ -42,8 +42,9 @@ defined in [ADR 0003](adr/0003-document-model.md).
 - [x] Undo/redo log: `Document` (project, history, sequence number) changed only by `Entry`s (do, undo, redo), replay, and a document hash
 - [x] Protocol: document snapshot on connect, edit commands in both directions
 - [x] The stage is the only writer: it applies each command, numbers it, and sends it out
-- [ ] The editor keeps a copy of the document and autosaves the command log
-- [ ] On a stage restart, the editor sends the snapshot and replays the log. Test: replay gives an identical document.
+- [x] The editor keeps a copy of the document and autosaves the command log (restoring it after an editor crash is part of M3's Open/Save)
+- [x] On a stage restart, the editor sends the snapshot and replays the log. Test: replay gives an identical document (`a_restarted_stage_replays_the_editors_log`)
+- [ ] Undo/Redo and a temporary debug edit in the editor, exercised by the UI smoke test
 - [x] Bump `PROTOCOL_VERSION` (now 2)
 
 ### M3: editor panels on real data
