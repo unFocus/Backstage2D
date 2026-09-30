@@ -7,17 +7,12 @@
 //! the project and marks the recovery log as saved. See
 //! `docs/adr/0004-commands-and-document-authority.md`.
 
+use crate::recovery::{self, Recovery, RecoveryMeta};
 use backstage_core::{Document, Entry, Project, SaveError};
 use backstage_protocol::{Snapshot, ToStage};
-use serde::{Deserialize, Serialize};
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
-
-const BASE_DIR: &str = "base.bs2d";
-const LOG_FILE: &str = "log.ron";
-const META_FILE: &str = "meta.ron";
 /// A project directory's extension.
 pub const PROJECT_EXTENSION: &str = "bs2d";
 
@@ -54,7 +49,7 @@ pub struct WorkingCopy {
     path: Option<PathBuf>,
     /// The project as last opened or saved.
     saved: Project,
-    /// A `Load` was sent and its `Loaded` hasn't checked out yet. Commits
+    /// A `Load` was sent and its `Loaded` hasn't been checked yet. Commits
     /// arriving meanwhile belong to the stage's previous document.
     awaiting_load: bool,
     next_request: u64,
@@ -80,6 +75,25 @@ impl WorkingCopy {
         })
     }
 
+    /// Takes over an orphaned recovery directory (see
+    /// [`recovery::scan`]): the document comes back with its undo history,
+    /// its path, and its saved state, and new edits go on being appended
+    /// to the same directory.
+    pub fn restore(dir: &Path) -> Result<Self, String> {
+        let (recovery, recovered) = Recovery::resume(dir)?;
+        let (doc, saved) = recovered.replay()?;
+        Ok(Self {
+            base: Snapshot::of(&recovered.base).map_err(|e| e.to_string())?,
+            doc,
+            log: recovered.log,
+            path: recovered.meta.source,
+            saved,
+            awaiting_load: false,
+            next_request: 1,
+            recovery: Some(recovery),
+        })
+    }
+
     pub fn document(&self) -> &Document {
         &self.doc
     }
@@ -90,10 +104,7 @@ impl WorkingCopy {
 
     /// The project directory's name without its extension, or "Untitled".
     pub fn display_name(&self) -> String {
-        self.path
-            .as_deref()
-            .and_then(Path::file_stem)
-            .map_or_else(|| "Untitled".to_owned(), |s| s.to_string_lossy().into_owned())
+        recovery::project_name(self.path.as_deref())
     }
 
     /// The project differs from the one last opened or saved. Undoing back
@@ -104,7 +115,7 @@ impl WorkingCopy {
 
     /// The directory the log is autosaved to, if autosave is on.
     pub fn recovery_dir(&self) -> Option<&Path> {
-        self.recovery.as_ref().map(|r| r.dir.as_path())
+        self.recovery.as_ref().map(Recovery::dir)
     }
 
     /// What to send a stage that just connected: the base and every
@@ -148,12 +159,18 @@ impl WorkingCopy {
         Ok(true)
     }
 
+    /// A `Load` from [`load_message`](Self::load_message) hasn't been
+    /// answered yet. The next `Loaded` from the stage is its answer.
+    pub fn awaiting_load(&self) -> bool {
+        self.awaiting_load
+    }
+
     /// Checks a (re)started stage's `Loaded` against the copy. Commits are
-    /// taken again once it matches.
+    /// taken again once it has been checked.
     pub fn check_loaded(&mut self, seq: u64, hash: u64) -> Result<(), String> {
+        self.awaiting_load = false;
         let (want_seq, want_hash) = (self.doc.seq(), self.doc.hash());
         if (seq, hash) == (want_seq, want_hash) {
-            self.awaiting_load = false;
             Ok(())
         } else {
             Err(format!(
@@ -190,8 +207,7 @@ impl WorkingCopy {
     /// included (the user chose not to save them).
     pub fn discard(self) {
         if let Some(recovery) = self.recovery {
-            drop(recovery.log);
-            let _ = fs::remove_dir_all(&recovery.dir);
+            recovery.remove();
         }
     }
 }
@@ -227,115 +243,13 @@ pub fn save_target(picked: &Path) -> Result<PathBuf, String> {
     }
 }
 
-/// `meta.ron` in a recovery directory: where the project lives, and how
-/// much of the log is already saved there.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct RecoveryMeta {
-    /// The project's directory; `None` if it was never saved.
-    pub source: Option<PathBuf>,
-    /// The number of log entries whose result is saved at `source`.
-    pub saved_seq: u64,
-}
-
-/// The on-disk copy: `base.bs2d/` (the project as opened), `log.ron` (one
-/// committed entry per line), and `meta.ron`.
-pub struct Recovery {
-    dir: PathBuf,
-    log: File,
-}
-
-impl Recovery {
-    /// A fresh directory for this editor run:
-    /// `$XDG_STATE_HOME/backstage2d/recovery/<pid>-<unix seconds>/`.
-    pub fn default_dir() -> io::Result<PathBuf> {
-        let state = match std::env::var_os("XDG_STATE_HOME") {
-            Some(dir) => PathBuf::from(dir),
-            None => {
-                PathBuf::from(std::env::var_os("HOME").ok_or_else(|| io::Error::other("HOME is not set"))?)
-                    .join(".local/state")
-            }
-        };
-        let secs = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
-        let dir = state.join("backstage2d/recovery").join(format!("{}-{secs}", std::process::id()));
-        // Opening a second project in the same second needs its own name.
-        let mut unique = dir.clone();
-        for n in 2.. {
-            if !unique.exists() {
-                break;
-            }
-            unique = dir.with_file_name(format!("{}-{secs}-{n}", std::process::id()));
-        }
-        Ok(unique)
-    }
-
-    /// Saves `project` as the base in `dir` and starts an empty log.
-    /// `source` is where the project was opened from, if anywhere.
-    pub fn create(dir: PathBuf, project: &Project, source: Option<&Path>) -> io::Result<Self> {
-        backstage_core::save(project, &dir.join(BASE_DIR)).map_err(io::Error::other)?;
-        let recovery =
-            Self { log: OpenOptions::new().create_new(true).append(true).open(dir.join(LOG_FILE))?, dir };
-        recovery.write_meta(&RecoveryMeta { source: source.map(Path::to_owned), saved_seq: 0 })?;
-        Ok(recovery)
-    }
-
-    fn append(&mut self, entry: &Entry) -> io::Result<()> {
-        let mut line = entry.to_line();
-        line.push('\n');
-        self.log.write_all(line.as_bytes())?;
-        self.log.sync_data()
-    }
-
-    /// Replaces `meta.ron` atomically.
-    fn write_meta(&self, meta: &RecoveryMeta) -> io::Result<()> {
-        let mut text = backstage_core::io::to_ron_line(meta).map_err(io::Error::other)?;
-        text.push('\n');
-        let tmp = self.dir.join(format!("{META_FILE}.tmp"));
-        let mut file = File::create(&tmp)?;
-        file.write_all(text.as_bytes())?;
-        file.sync_all()?;
-        fs::rename(&tmp, self.dir.join(META_FILE))
-    }
-}
-
-/// A recovery directory read back.
-#[derive(Debug)]
-pub struct Recovered {
-    pub base: Project,
-    pub log: Vec<Entry>,
-    pub meta: RecoveryMeta,
-}
-
-/// Reads a recovery directory back. A last log line without its newline
-/// was cut off by a crash and is ignored. A directory from before
-/// `meta.ron` existed reads as never saved.
-pub fn read_recovery(dir: &Path) -> Result<Recovered, String> {
-    let base = backstage_core::load(&dir.join(BASE_DIR)).map_err(|e| e.to_string())?;
-    let path = dir.join(LOG_FILE);
-    let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let complete = match text.rfind('\n') {
-        Some(end) => &text[..end],
-        None => "",
-    };
-    let log = complete
-        .lines()
-        .enumerate()
-        .map(|(i, line)| Entry::from_line(line).map_err(|e| format!("{}:{}: {e}", path.display(), i + 1)))
-        .collect::<Result<_, _>>()?;
-    let meta_path = dir.join(META_FILE);
-    let meta = match fs::read_to_string(&meta_path) {
-        Ok(text) => backstage_core::io::from_ron_line(text.trim_end())
-            .map_err(|e| format!("{}: {e}", meta_path.display()))?,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => RecoveryMeta::default(),
-        Err(e) => return Err(format!("{}: {e}", meta_path.display())),
-    };
-    Ok(Recovered { base, log, meta })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recovery::{LOG_FILE, META_FILE, read_recovery};
     use backstage_core::sample::{self, ids::*};
     use backstage_core::{Command, Props};
+    use std::io::Write;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     fn tempdir() -> PathBuf {
@@ -543,6 +457,40 @@ mod tests {
         fs::write(ext("file.bs2d"), "").unwrap();
         assert!(save_target(&ext("file.bs2d")).unwrap_err().contains("is a file"));
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn restore_carries_on_where_the_crashed_editor_stopped() {
+        let (mut copy, dir) = with_recovery();
+        let target = tempdir().join("restored.bs2d");
+        copy.committed(1, &nudge(1.0)).unwrap();
+        copy.save_to(&target).unwrap();
+        copy.committed(2, &nudge(2.0)).unwrap();
+        let before = copy.document().clone();
+        // The crash: no finish, and a line cut off mid-write.
+        drop(copy);
+        let mut log = fs::OpenOptions::new().append(true).open(dir.join(LOG_FILE)).unwrap();
+        log.write_all(b"Do(SetRest(comp:").unwrap();
+        drop(log);
+
+        let mut copy = WorkingCopy::restore(&dir).unwrap();
+        assert_eq!(copy.document(), &before, "history included");
+        assert_eq!(copy.document().hash(), before.hash());
+        assert_eq!(copy.path(), Some(target.as_path()));
+        assert!(copy.is_dirty());
+        assert_eq!(copy.recovery_dir(), Some(dir.as_path()));
+
+        // New edits append after the recovered ones, cleanly.
+        copy.committed(3, &Entry::Undo).unwrap();
+        assert!(!copy.is_dirty(), "back at the saved state");
+        let recovered = read_recovery(&dir).unwrap();
+        assert_eq!(recovered.log, [nudge(1.0), nudge(2.0), Entry::Undo]);
+        assert_eq!(&Document::replay(recovered.base, &recovered.log).unwrap(), copy.document());
+
+        assert!(WorkingCopy::restore(&dir).is_err(), "still in use by `copy`");
+        copy.finish();
+        assert!(!dir.exists());
+        fs::remove_dir_all(target.parent().unwrap()).unwrap();
     }
 
     #[test]

@@ -128,7 +128,29 @@ editor's `WorkingCopy`, `Load`, and the protocol are unchanged, and
   (with its own recovery directory) and sends its `Load` to the running
   stage. A commit for the old document can still arrive before `Loaded`,
   since the socket is ordered, so a copy ignores commits between sending
-  `Load` and accepting the `Loaded` it answers.
+  `Load` and checking the `Loaded` it answers. If the old copy's own `Load`
+  is still unanswered, the next `Loaded` wouldn't be the new one's, so the
+  editor starts a fresh stage instead.
+
+**Restoring after an editor crash** (`recovery.rs`):
+- **A live directory is locked.** The editor holds an exclusive lock on its
+  `log.ron` (`File::try_lock`). The OS releases it when the process dies,
+  even on SIGKILL, so an unlocked directory is an orphan. This works the
+  same on every platform and doesn't depend on PIDs, which get reused.
+- **At startup, `scan`** takes a shared lock on each directory in turn:
+  - a directory another editor holds is skipped;
+  - an unreadable one is reported on stderr and never deleted;
+  - one with nothing unsaved is deleted. "Nothing unsaved" means replaying
+    the whole log gives the project at `saved_seq`, which is `base` if it was
+    never saved. This is the cleanup policy for old directories.
+  - The rest are candidates.
+- **Only the newest candidate is offered per launch:** Restore, Discard
+  (after a confirmation), or Not Now. The others are offered on later
+  launches.
+- **Restore takes over the directory.** `Recovery::resume` locks it, cuts
+  off a log line the crash left incomplete, and the editor carries on
+  appending there. The document is the replayed log, so the undo history
+  and the saved state come back, and the path comes from `meta.ron`.
 
 ## Consequences
 - **Every future editing feature only produces entries:** timeline and
@@ -149,10 +171,10 @@ editor's `WorkingCopy`, `Load`, and the protocol are unchanged, and
   in `Load`. There is no cap on the undo history yet.
 - **fsync cost:** batching it if M4 drags commit faster than per-entry
   fsync allows.
-- **Restoring after an editor crash:** the prompt (M3). It will offer
-  directories whose owner is gone and whose log has entries past
-  `saved_seq`.
-- **Old recovery directories:** a policy for cleaning them up.
+- **More than one orphan:** offered one per launch, newest first. A list to
+  choose from can come later if this turns out to matter.
+- **Deleting a directory on Windows** while its lock is held needs checking
+  when the editor is ported there.
 - **The arrow-key nudge:** a debug edit, removed once on-stage editing
   exists (M4).
 - **Runtime state:** mixer and playhead state surviving a stage restart.

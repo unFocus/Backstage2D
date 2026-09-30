@@ -6,6 +6,7 @@ mod common;
 use backstage_core::sample::ids;
 use backstage_core::{Command, Entry, Props};
 use backstage_protocol::{Snapshot, ToStage};
+use backstage_tools::recovery::Recovery;
 use backstage_tools::supervisor::{self, StageEvent, Supervisor};
 use backstage_tools::working_copy::WorkingCopy;
 use std::path::Path;
@@ -266,4 +267,47 @@ fn a_second_load_replaces_the_document() {
         new.document().project().compositions[&ids::STAGE].nodes[&ids::GROUND].rest,
         Props::at(99.0, 0.0)
     );
+}
+
+/// After an editor crash, a copy restored from its recovery directory
+/// loads onto a fresh stage as the same document, and its undo history
+/// carries on there.
+#[test]
+fn a_restored_copy_loads_with_its_history() {
+    setup();
+    let nudge =
+        |x| Entry::Do(Command::SetRest { comp: ids::STAGE, node: ids::GROUND, rest: Props::at(x, 0.0) });
+    let dir = std::env::temp_dir().join(format!("backstage-tools-it-restore-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let project = backstage_core::sample::bounce();
+    let recovery = Recovery::create(dir.clone(), &project, None).unwrap();
+    let mut copy = WorkingCopy::new(project, None, Some(recovery)).unwrap();
+    let mut sup = Supervisor::new(common::stage_binary());
+
+    let (first, events) = start(&mut sup);
+    connected_pid(&events, first);
+    sup.send(&copy.load_message());
+    let (seq, hash) = loaded(&events, first);
+    copy.check_loaded(seq, hash).unwrap();
+    for entry in [nudge(10.0), nudge(20.0), Entry::Undo] {
+        commit(&mut copy, &sup, &events, first, entry);
+    }
+    // The editor crashes: its copy is gone without cleaning up.
+    drop(copy);
+    sup.stop();
+
+    let mut restored = WorkingCopy::restore(&dir).unwrap();
+    let (second, events) = start(&mut sup);
+    connected_pid(&events, second);
+    sup.send(&restored.load_message());
+    let (seq, hash) = loaded(&events, second);
+    assert_eq!(seq, 3);
+    restored.check_loaded(seq, hash).unwrap();
+    assert_eq!(commit(&mut restored, &sup, &events, second, Entry::Redo), 4);
+    assert_eq!(
+        restored.document().project().compositions[&ids::STAGE].nodes[&ids::GROUND].rest,
+        Props::at(20.0, 0.0)
+    );
+    restored.discard();
+    assert!(!dir.exists());
 }

@@ -2,10 +2,11 @@
 
 use crate::health::{AfterExit, StageHealth};
 use crate::panels;
-use crate::smoke::{SmokeStep, SmokeTest};
+use crate::recovery::{self, Candidate, Recovery};
+use crate::smoke::{self, SmokeStep, SmokeTest};
 use crate::stage_view::StageView;
 use crate::supervisor::{StageEvent, Supervisor};
-use crate::working_copy::{self, CommitError, Recovery, SaveToError, WorkingCopy};
+use crate::working_copy::{self, CommitError, SaveToError, WorkingCopy};
 use backstage_core::{Command, Entry, Project};
 use backstage_protocol::ToStage;
 use gtk::{gdk, gio, glib, prelude::*};
@@ -87,6 +88,22 @@ pub enum AppMsg {
     /// Answer to "Save changes?": `None` is Cancel, `Some(true)` Save,
     /// `Some(false)` Don't Save.
     UnsavedAnswer(Then, Option<bool>),
+    /// A crashed editor left unsaved edits; `more` other directories also
+    /// have some.
+    OfferRestore {
+        candidate: Candidate,
+        more: usize,
+    },
+    RestoreAnswer(Candidate, RestoreChoice),
+    /// Delete a recovery directory: the user confirmed Discard.
+    DeleteRecovery(PathBuf),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RestoreChoice {
+    Restore,
+    Discard,
+    NotNow,
 }
 
 #[relm4::component(pub)]
@@ -253,6 +270,14 @@ impl SimpleComponent for App {
                 model.banner = Some(format!("Could not open the project:\n{e}"));
             }
         }
+        // Once the window is up, offer the newest unsaved work a crashed
+        // editor left behind. The rest wait for later launches.
+        let candidates = Recovery::root().map(|root| recovery::scan(&root)).unwrap_or_default();
+        if let Some(candidate) = candidates.first().cloned() {
+            let s = sender.clone();
+            let more = candidates.len() - 1;
+            glib::idle_add_local_once(move || s.input(AppMsg::OfferRestore { candidate, more }));
+        }
 
         ComponentParts { model, widgets }
     }
@@ -293,6 +318,14 @@ impl SimpleComponent for App {
             AppMsg::UnsavedAnswer(_, None) => {}
             AppMsg::UnsavedAnswer(then, Some(true)) => self.save(Some(then), &sender),
             AppMsg::UnsavedAnswer(then, Some(false)) => self.proceed(then, true, &sender),
+            AppMsg::OfferRestore { candidate, more } => self.offer_restore(candidate, more, &sender),
+            AppMsg::RestoreAnswer(candidate, choice) => self.answer_restore(candidate, choice, &sender),
+            AppMsg::DeleteRecovery(dir) => {
+                eprintln!("discarding unsaved edits in {}", dir.display());
+                if let Err(e) = std::fs::remove_dir_all(&dir) {
+                    self.alert("Could not discard the unsaved changes", &format!("{}: {e}", dir.display()));
+                }
+            }
             AppMsg::Tick => {
                 self.fps = std::mem::take(&mut self.frames_this_second);
                 if self.health.is_stalled(Instant::now()) {
@@ -374,22 +407,113 @@ impl App {
     /// Replaces the document with the project at `path`, keeping the
     /// running stage: it gets the new document with `Load`.
     fn open_path(&mut self, path: &Path, discard: bool, sender: &ComponentSender<Self>) {
-        let mut copy = match open_copy(Some(path)) {
-            Ok(copy) => copy,
-            Err(e) => return self.alert("Could not open the project", &format!("{e:#}")),
-        };
+        match open_copy(Some(path)) {
+            Ok(copy) => self.replace_copy(copy, discard, sender),
+            Err(e) => self.alert("Could not open the project", &format!("{e:#}")),
+        }
+    }
+
+    /// Makes `copy` the document, keeping the running stage if it can: the
+    /// stage gets the new document with `Load`. `discard` drops the old
+    /// copy's unsaved edits.
+    fn replace_copy(&mut self, mut copy: WorkingCopy, discard: bool, sender: &ComponentSender<Self>) {
         self.banner = None;
         self.stage_ready = false;
         let load = copy.load_message();
-        match self.copy.replace(copy) {
-            Some(old) if discard => old.discard(),
-            Some(old) => old.finish(),
+        let Some(old) = self.copy.replace(copy) else {
             // Nothing opened at startup, so no stage is running yet.
-            None => return self.start_stage(sender, true),
+            return self.start_stage(sender, true);
+        };
+        // The next `Loaded` must answer this load. If the stage is still
+        // loading the old document, it wouldn't, so start a fresh one.
+        let restart = old.awaiting_load();
+        if discard {
+            old.discard();
+        } else {
+            old.finish();
         }
-        // Commits for the old document may still arrive; the new copy
-        // ignores them until the stage reports this load.
-        self.supervisor.send(&load);
+        if restart {
+            self.start_stage(sender, true);
+        } else {
+            // Commits for the old document may still arrive; the new copy
+            // ignores them until the stage reports this load.
+            self.supervisor.send(&load);
+        }
+    }
+
+    fn offer_restore(&mut self, candidate: Candidate, more: usize, sender: &ComponentSender<Self>) {
+        if let Some(smoke) = self.smoke.as_mut() {
+            let step = smoke.restore_offered();
+            if step == Some(SmokeStep::Restore) {
+                return self.answer_restore(candidate, RestoreChoice::Restore, sender);
+            }
+            return self.run_smoke_step(step, sender);
+        }
+        let edits =
+            if candidate.unsaved == 1 { "1 edit".to_owned() } else { format!("{} edits", candidate.unsaved) };
+        let when = candidate
+            .modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|d| glib::DateTime::from_unix_local(d.as_secs() as i64).ok())
+            .and_then(|t| t.format("%b %e, %H:%M").ok())
+            .map_or_else(String::new, |t| format!(" (last edit {t})"));
+        let mut detail = format!("Backstage2D closed without saving {edits}{when}.");
+        if more > 0 {
+            detail.push_str(&format!("\n{more} more set(s) of unsaved changes will be offered next time."));
+        }
+        let dialog = gtk::AlertDialog::builder()
+            .message(format!("Restore unsaved changes to “{}”?", candidate.name))
+            .detail(detail)
+            .buttons(["Not Now", "Discard", "Restore"])
+            .cancel_button(0)
+            .default_button(2)
+            .modal(true)
+            .build();
+        let s = sender.clone();
+        dialog.choose(Some(&self.window), None::<&gio::Cancellable>, move |answer| {
+            let choice = match answer {
+                Ok(2) => RestoreChoice::Restore,
+                Ok(1) => RestoreChoice::Discard,
+                _ => RestoreChoice::NotNow,
+            };
+            s.input(AppMsg::RestoreAnswer(candidate, choice));
+        });
+    }
+
+    fn answer_restore(
+        &mut self,
+        candidate: Candidate,
+        choice: RestoreChoice,
+        sender: &ComponentSender<Self>,
+    ) {
+        match choice {
+            RestoreChoice::NotNow => {}
+            RestoreChoice::Restore => match WorkingCopy::restore(&candidate.dir) {
+                Ok(copy) => {
+                    eprintln!("restored {} entries from {}", copy.document().seq(), candidate.dir.display());
+                    // The fresh startup copy has nothing worth keeping.
+                    self.replace_copy(copy, true, sender);
+                }
+                Err(e) => self.alert("Could not restore the unsaved changes", &e),
+            },
+            RestoreChoice::Discard => {
+                let dialog = gtk::AlertDialog::builder()
+                    .message(format!("Discard unsaved changes to “{}”?", candidate.name))
+                    .detail("This can't be undone.")
+                    .buttons(["Cancel", "Discard"])
+                    .cancel_button(0)
+                    .default_button(0)
+                    .modal(true)
+                    .build();
+                let s = sender.clone();
+                dialog.choose(Some(&self.window), None::<&gio::Cancellable>, move |answer| {
+                    if matches!(answer, Ok(1)) {
+                        s.input(AppMsg::DeleteRecovery(candidate.dir));
+                    }
+                });
+            }
+        }
     }
 
     /// Save: to the project's path, or Save As if it has none.
@@ -462,6 +586,8 @@ impl App {
             None => {}
             Some(SmokeStep::Nudge) => self.update_nudge(10.0, 0.0),
             Some(SmokeStep::Undo) => self.submit(Entry::Undo),
+            // Carried out by `offer_restore`, which has the candidate.
+            Some(SmokeStep::Restore) => {}
             Some(SmokeStep::Save) => match self.copy.as_ref().and_then(|c| c.path().map(Path::to_owned)) {
                 Some(dir) => self.save_to(&dir, None, sender),
                 None => self.run_smoke_step(Some(SmokeStep::Fail("the project has no path".into())), sender),
@@ -542,8 +668,13 @@ impl App {
                         self.banner = Some(format!("The stage's document differs from the editor's.\n{e}"));
                     }
                 }
-                let step =
-                    self.smoke.as_mut().and_then(|s| s.loaded(self.supervisor.session(), seq, check.is_ok()));
+                let loaded = smoke::Loaded {
+                    seq,
+                    matches: check.is_ok(),
+                    dirty: copy.is_dirty(),
+                    can_redo: copy.document().can_redo(),
+                };
+                let step = self.smoke.as_mut().and_then(|s| s.loaded(self.supervisor.session(), loaded));
                 self.run_smoke_step(step, sender);
             }
             StageEvent::Committed { seq, entry, .. } => {

@@ -1,8 +1,13 @@
-//! Self-driving smoke test for headless UI runs (`BACKSTAGE_SMOKE=1`). It
-//! runs the editing loop in the real editor, through the same paths as the
-//! user: wait for frames, nudge, kill the stage once the edit is committed,
-//! check the restarted stage replayed it, save, then undo and exit 0. See
-//! `tests/ui_smoke.rs`.
+//! Self-driving smoke test for headless UI runs. See `tests/ui_smoke.rs`.
+//!
+//! - `BACKSTAGE_SMOKE=1` runs the editing loop in the real editor, through
+//!   the same paths as the user: wait for frames, nudge, kill the stage once
+//!   the edit is committed, check the restarted stage replayed it, save, then
+//!   undo and exit 0 without cleaning up, like a crash. That leaves unsaved
+//!   edits (the undo) in the recovery directory.
+//! - `BACKSTAGE_SMOKE=restore`, run next with the same state directory,
+//!   answers the restore prompt with Restore and passes once the stage has
+//!   loaded the restored document, history included.
 //!
 //! The app calls the hooks below and carries out the [`SmokeStep`]s they
 //! return.
@@ -18,6 +23,7 @@ const FRAMES_PER_PHASE: u32 = 30;
 pub enum SmokeStep {
     Nudge,
     Save,
+    Restore,
     Undo,
     Kill,
     Pass,
@@ -38,7 +44,22 @@ enum Phase {
     AwaitSave,
     /// Undid; waiting for the commit.
     AwaitUndo,
+    /// Restore mode: waiting for the restore prompt.
+    AwaitOffer,
+    /// Restored; waiting for the stage to load it.
+    AwaitRestoredLoad,
     Done,
+}
+
+/// A stage finished loading.
+#[derive(Debug, Clone, Copy)]
+pub struct Loaded {
+    pub seq: u64,
+    /// The editor's hash check passed.
+    pub matches: bool,
+    /// The editor's copy has unsaved changes.
+    pub dirty: bool,
+    pub can_redo: bool,
 }
 
 #[derive(Debug)]
@@ -52,8 +73,26 @@ impl SmokeTest {
         Self { first_session: None, phase: Phase::FirstFrames(0) }
     }
 
+    fn restore() -> Self {
+        Self { first_session: None, phase: Phase::AwaitOffer }
+    }
+
     pub fn from_env() -> Option<Self> {
-        std::env::var(SMOKE_ENV).is_ok_and(|v| v == "1").then(Self::new)
+        match std::env::var(SMOKE_ENV).ok()?.as_str() {
+            "1" => Some(Self::new()),
+            "restore" => Some(Self::restore()),
+            _ => None,
+        }
+    }
+
+    /// The editor found unsaved edits from a crashed run.
+    pub fn restore_offered(&mut self) -> Option<SmokeStep> {
+        if self.phase != Phase::AwaitOffer {
+            return Some(SmokeStep::Fail(format!("unexpected restore offer in phase {:?}", self.phase)));
+        }
+        eprintln!("smoke: restore offered, restoring");
+        self.phase = Phase::AwaitRestoredLoad;
+        Some(SmokeStep::Restore)
     }
 
     /// A frame was shown.
@@ -112,9 +151,21 @@ impl SmokeTest {
     }
 
     /// A stage finished loading; `matches` is the editor's hash check.
-    pub fn loaded(&mut self, session: u64, seq: u64, matches: bool) -> Option<SmokeStep> {
+    pub fn loaded(&mut self, session: u64, loaded: Loaded) -> Option<SmokeStep> {
+        let Loaded { seq, matches, dirty, can_redo } = loaded;
         if !matches {
             return Some(SmokeStep::Fail(format!("session {session}: replayed document differs")));
+        }
+        if self.phase == Phase::AwaitRestoredLoad {
+            // The first run left [nudge, undo], saved after the nudge.
+            if (seq, dirty, can_redo) != (2, true, true) {
+                return Some(SmokeStep::Fail(format!(
+                    "restored document: seq {seq}, dirty {dirty}, can redo {can_redo}; expected 2, true, true"
+                )));
+            }
+            eprintln!("smoke: restored 2 entries, and the stage matches the editor");
+            self.phase = Phase::Done;
+            return Some(SmokeStep::Pass);
         }
         if self.phase == Phase::AwaitReplay && Some(session) != self.first_session {
             if seq != 1 {
@@ -129,7 +180,11 @@ impl SmokeTest {
 
 #[cfg(test)]
 mod tests {
-    use super::{FRAMES_PER_PHASE, SmokeStep, SmokeTest};
+    use super::{FRAMES_PER_PHASE, Loaded, SmokeStep, SmokeTest};
+
+    fn ok(seq: u64) -> Loaded {
+        Loaded { seq, matches: true, dirty: false, can_redo: false }
+    }
 
     fn frames(smoke: &mut SmokeTest, session: u64, n: u32) -> Vec<SmokeStep> {
         (0..n).filter_map(|_| smoke.frame(session)).collect()
@@ -138,14 +193,14 @@ mod tests {
     #[test]
     fn runs_edit_kill_replay_undo_in_order() {
         let mut smoke = SmokeTest::new();
-        assert_eq!(smoke.loaded(1, 0, true), None);
+        assert_eq!(smoke.loaded(1, ok(0)), None);
         assert_eq!(frames(&mut smoke, 1, FRAMES_PER_PHASE), [SmokeStep::Nudge]);
         assert_eq!(smoke.committed(1), Some(SmokeStep::Kill));
         // Frames still in flight from the killed stage don't count.
         assert_eq!(frames(&mut smoke, 1, FRAMES_PER_PHASE), []);
         // Nor do frames from the new stage before its replay checked out.
         assert_eq!(frames(&mut smoke, 2, FRAMES_PER_PHASE), []);
-        assert_eq!(smoke.loaded(2, 1, true), None);
+        assert_eq!(smoke.loaded(2, ok(1)), None);
         assert_eq!(frames(&mut smoke, 2, FRAMES_PER_PHASE), [SmokeStep::Save]);
         assert_eq!(smoke.saved(true), Some(SmokeStep::Undo));
         assert_eq!(smoke.committed(2), Some(SmokeStep::Pass));
@@ -154,12 +209,12 @@ mod tests {
     #[test]
     fn a_mismatched_or_empty_replay_fails() {
         let mut smoke = SmokeTest::new();
-        assert!(matches!(smoke.loaded(1, 0, false), Some(SmokeStep::Fail(_))));
+        assert!(matches!(smoke.loaded(1, Loaded { matches: false, ..ok(0) }), Some(SmokeStep::Fail(_))));
 
         let mut smoke = SmokeTest::new();
         frames(&mut smoke, 1, FRAMES_PER_PHASE);
         smoke.committed(1);
-        assert!(matches!(smoke.loaded(2, 0, true), Some(SmokeStep::Fail(_))), "the edit was lost");
+        assert!(matches!(smoke.loaded(2, ok(0)), Some(SmokeStep::Fail(_))), "the edit was lost");
     }
 
     #[test]
@@ -167,5 +222,22 @@ mod tests {
         let mut smoke = SmokeTest::new();
         assert!(matches!(smoke.committed(1), Some(SmokeStep::Fail(_))));
         assert!(matches!(smoke.saved(true), Some(SmokeStep::Fail(_))));
+    }
+
+    #[test]
+    fn restore_mode_restores_and_checks_the_history() {
+        let mut smoke = SmokeTest::restore();
+        assert_eq!(smoke.restore_offered(), Some(SmokeStep::Restore));
+        assert!(matches!(smoke.loaded(1, ok(2)), Some(SmokeStep::Fail(_))), "not dirty, no redo");
+        let mut smoke = SmokeTest::restore();
+        smoke.restore_offered();
+        let restored = Loaded { dirty: true, can_redo: true, ..ok(2) };
+        assert_eq!(smoke.loaded(1, restored), Some(SmokeStep::Pass));
+    }
+
+    #[test]
+    fn an_offer_outside_restore_mode_fails() {
+        let mut smoke = SmokeTest::new();
+        assert!(matches!(smoke.restore_offered(), Some(SmokeStep::Fail(_))));
     }
 }
