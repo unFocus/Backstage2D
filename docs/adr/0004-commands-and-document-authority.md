@@ -177,5 +177,6 @@ editor's `WorkingCopy`, `Load`, and the protocol are unchanged, and
   when the editor is ported there.
 - **The arrow-key nudge:** a debug edit, removed once on-stage editing
   exists (M4).
-- **Runtime state:** mixer and playhead state surviving a stage restart.
-  Today a restarted stage starts its clock from zero.
+- **Runtime state:** the playhead survives a stage restart, since the
+  editor owns it and resends it (`ToStage::Transport`, M3). Mixer state
+  from scripts (M6) doesn't yet.

@@ -11,4 +11,5 @@ pub mod recovery;
 pub mod smoke;
 pub mod stage_view;
 pub mod supervisor;
+pub mod timeline;
 pub mod working_copy;

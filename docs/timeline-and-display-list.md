@@ -90,8 +90,18 @@ Implemented in `backstage_core::eval`.
   parent path, until the script removes them.
 
 ## Editing aids (not playback)
-- **Time grid:** keys snap to N ticks per second (default 60; 30 for classic
-  games).
+- **Time grid:** keys and the timeline's playhead snap to N ticks per
+  second (default 60; 30 for classic games). The timeline's Snap toggle and
+  grid menu change `EditorPrefs`, which is an undoable edit saved with the
+  project.
+- **The editor's playhead:** the editor owns a transport (the animation
+  the root composition plays, its clock, and whether it's playing) and
+  sends it to the stage (`ToStage::Transport`), again whenever a stage
+  connects. So a restarted stage comes back at the same moment. The stage
+  starts paused at 0, as in Flash. Enter plays and pauses, and scrubbing
+  pauses. Seeking just evaluates another moment (`evaluate` is pure), so
+  free-running nested instances move with it. Without a `Transport`, the
+  stage (and the player) plays the default animation from zero.
 - **Spatial grid:** objects snap to a pixel grid on the stage.
 - **Pixel-art mode** (project setting): whole-pixel positions and
   nearest-neighbor bitmaps.

@@ -60,6 +60,7 @@ fn edits_survive_stage_and_editor_crashes_in_the_real_editor() {
     assert!(passed, "smoke test failed:\n{log}");
     assert!(log.contains("passed"), "no pass marker:\n{log}");
     assert!(log.contains("smoke: stage replayed 1 entry and matches the editor"), "no replay:\n{log}");
+    assert!(log.contains("smoke: scrubbed, nudging"), "no scrub:\n{log}");
     assert!(log.contains("smoke: saved, undoing"), "no save:\n{log}");
     assert!(log.contains(&format!("autosaving edits to {}", state.display())), "autosave is off:\n{log}");
     // Saved after the nudge and before the undo.

@@ -7,9 +7,10 @@
 //! [`host`]). See `docs/adr/0002-stage-process-isolation.md`.
 
 mod host;
+mod transport;
 
 use anyhow::{Context, Result, bail};
-use backstage_core::{RuntimeState, Time, evaluate};
+use backstage_core::evaluate;
 use backstage_protocol::{
     FRAME_SLOTS, FrameRing, PROTOCOL_VERSION, ToStage, ToTools, read_message, write_message,
 };
@@ -43,7 +44,6 @@ fn run() -> Result<()> {
     let inbox = spawn_reader(socket.try_clone()?);
 
     let mut host = host::DocumentHost::default();
-    let state = RuntimeState::default();
 
     let gpu = pollster::block_on(HeadlessGpu::new("stage"))
         .map_err(|e| anyhow::anyhow!("initializing GPU: {e}"))?;
@@ -63,7 +63,7 @@ fn run() -> Result<()> {
     let mut seq = 0u64;
     let mut scale = 1.0f64;
     let mut pointer = None;
-    let started = Instant::now();
+    let mut transport = transport::Transport::new(Instant::now());
     let mut next_frame = Instant::now();
     let mut next_heartbeat = Instant::now();
 
@@ -99,6 +99,9 @@ fn run() -> Result<()> {
                     target = Some(t);
                 }
                 Ok(ToStage::Pointer(p)) => pointer = p,
+                Ok(ToStage::Transport { animation, time, playing }) => {
+                    transport = transport::Transport::set(animation, time, playing, Instant::now());
+                }
                 Ok(ToStage::Load { base, log }) => match host.load(&base, &log) {
                     Ok(reply) => {
                         renderer.clear_cache();
@@ -127,8 +130,7 @@ fn run() -> Result<()> {
 
         // Nothing to show until the document arrives.
         if let (Some(t), Some(project)) = (target.as_mut(), host.project()) {
-            let now = Time::from_ratio(started.elapsed().as_nanos() as i64, 1_000_000_000);
-            let scene = evaluate(project, &state, now);
+            let scene = evaluate(project, &transport.state(), transport.now(Instant::now()));
             let frame = Frame {
                 project,
                 scene: &scene,

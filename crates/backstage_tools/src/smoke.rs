@@ -1,7 +1,7 @@
 //! Self-driving smoke test for headless UI runs. See `tests/ui_smoke.rs`.
 //!
 //! - `BACKSTAGE_SMOKE=1` runs the editing loop in the real editor, through
-//!   the same paths as the user: wait for frames, nudge, kill the stage once
+//!   the same paths as the user: wait for frames, scrub the timeline, nudge, kill the stage once
 //!   the edit is committed, check the restarted stage replayed it, save, then
 //!   undo and exit 0 without cleaning up, like a crash. That leaves unsaved
 //!   edits (the undo) in the recovery directory.
@@ -12,6 +12,7 @@
 //! The app calls the hooks below and carries out the [`SmokeStep`]s they
 //! return.
 
+use backstage_core::Time;
 use std::time::Duration;
 
 pub const SMOKE_ENV: &str = "BACKSTAGE_SMOKE";
@@ -21,6 +22,8 @@ const FRAMES_PER_PHASE: u32 = 30;
 /// What the app should do next.
 #[derive(Debug, PartialEq)]
 pub enum SmokeStep {
+    /// Scrub the timeline to this time.
+    Scrub(Time),
     Nudge,
     Save,
     Restore,
@@ -34,6 +37,8 @@ pub enum SmokeStep {
 enum Phase {
     /// Frames from the first stage.
     FirstFrames(u32),
+    /// Asked to scrub.
+    AwaitScrub,
     /// Nudged; waiting for the commit.
     AwaitNudge,
     /// Killed; waiting for a new stage to replay the log.
@@ -104,9 +109,9 @@ impl SmokeTest {
                 if *n < FRAMES_PER_PHASE {
                     return None;
                 }
-                eprintln!("smoke: {n} frames from session {session}, nudging");
-                self.phase = Phase::AwaitNudge;
-                Some(SmokeStep::Nudge)
+                eprintln!("smoke: {n} frames from session {session}, scrubbing");
+                self.phase = Phase::AwaitScrub;
+                Some(SmokeStep::Scrub(Time::from_secs(1)))
             }
             Phase::SecondFrames(n) if session != first => {
                 *n += 1;
@@ -136,6 +141,16 @@ impl SmokeTest {
             }
             (phase, seq) => Some(SmokeStep::Fail(format!("unexpected commit {seq} in phase {phase:?}"))),
         }
+    }
+
+    /// The scrub was carried out.
+    pub fn scrubbed(&mut self) -> Option<SmokeStep> {
+        if self.phase != Phase::AwaitScrub {
+            return Some(SmokeStep::Fail(format!("unexpected scrub in phase {:?}", self.phase)));
+        }
+        eprintln!("smoke: scrubbed, nudging");
+        self.phase = Phase::AwaitNudge;
+        Some(SmokeStep::Nudge)
     }
 
     /// A save finished; `ok` if the project was written.
@@ -180,7 +195,7 @@ impl SmokeTest {
 
 #[cfg(test)]
 mod tests {
-    use super::{FRAMES_PER_PHASE, Loaded, SmokeStep, SmokeTest};
+    use super::{FRAMES_PER_PHASE, Loaded, SmokeStep, SmokeTest, Time};
 
     fn ok(seq: u64) -> Loaded {
         Loaded { seq, matches: true, dirty: false, can_redo: false }
@@ -194,7 +209,8 @@ mod tests {
     fn runs_edit_kill_replay_undo_in_order() {
         let mut smoke = SmokeTest::new();
         assert_eq!(smoke.loaded(1, ok(0)), None);
-        assert_eq!(frames(&mut smoke, 1, FRAMES_PER_PHASE), [SmokeStep::Nudge]);
+        assert_eq!(frames(&mut smoke, 1, FRAMES_PER_PHASE), [SmokeStep::Scrub(Time::from_secs(1))]);
+        assert_eq!(smoke.scrubbed(), Some(SmokeStep::Nudge));
         assert_eq!(smoke.committed(1), Some(SmokeStep::Kill));
         // Frames still in flight from the killed stage don't count.
         assert_eq!(frames(&mut smoke, 1, FRAMES_PER_PHASE), []);
@@ -213,6 +229,7 @@ mod tests {
 
         let mut smoke = SmokeTest::new();
         frames(&mut smoke, 1, FRAMES_PER_PHASE);
+        smoke.scrubbed();
         smoke.committed(1);
         assert!(matches!(smoke.loaded(2, ok(0)), Some(SmokeStep::Fail(_))), "the edit was lost");
     }

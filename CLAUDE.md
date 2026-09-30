@@ -35,7 +35,10 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
 - `BACKSTAGE_PROJECT=<dir>` makes the editor open that project at startup
   instead of the built-in sample. File → Open (Ctrl+O) sends another one to
   the running stage with `Load`; the stage takes no project argument.
-  Save is Ctrl+S, and Save As is Ctrl+Shift+S.
+  Save is Ctrl+S, and Save As is Ctrl+Shift+S. Enter plays or pauses the
+  timeline.
+- The editor owns the playhead and sends it with `ToStage::Transport`
+  (protocol v3). The editor's stage starts paused at 0.
 
 ## Architecture rules (enforced by `dependency_boundaries.rs`)
 - `backstage_core` is pure data and logic. No GPU, GUI, windowing, or lyon.
@@ -103,6 +106,8 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
 ## Gotchas
 - Linux truncates process names to 15 characters:
   `pgrep -x backstage_player` never matches. Use `pkill -f <full path>`.
+  But a `-f` pattern also matches the shell running it when its own command
+  line contains the pattern; kill by PID (`ps -eo pid,args | grep "[t]arget/debug/…"`).
 - wgpu's `vertex_attr_array!` packs attributes back to back, so padding in
   instance structs must come last. `item_attributes_match_the_struct_layout`
   guards this.

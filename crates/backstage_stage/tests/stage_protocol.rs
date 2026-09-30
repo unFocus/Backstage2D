@@ -4,7 +4,7 @@
 mod common;
 
 use backstage_core::sample::{self, ids};
-use backstage_core::{Color, Command, Document, Entry, ProjectSettings};
+use backstage_core::{Color, Command, Document, Entry, ProjectSettings, Time};
 use backstage_protocol::{Snapshot, ToStage, ToTools};
 use backstage_render::{CROSSHAIR, PASTEBOARD};
 use common::{StageHarness, color_close};
@@ -112,6 +112,39 @@ fn committed_edits_undo_and_redo_show_on_stage() {
         ToTools::Committed { seq: 3, request: Some(9), entry: Entry::Redo }
     );
     assert!(color_close(stage_interior(&mut stage), RED));
+}
+
+/// Sets the playhead, and returns once every later frame reflects it: the
+/// stage answers requests in order, so a rejected no-op makes a barrier.
+fn transport(stage: &mut StageHarness, animation: Option<backstage_core::AnimId>, secs: f64, playing: bool) {
+    stage.send(&ToStage::Transport { animation, time: Time::from_secs_f64(secs), playing });
+    assert!(matches!(stage.submit(u64::MAX, Entry::Redo), ToTools::Rejected { .. }));
+}
+
+#[test]
+fn the_transport_pauses_seeks_and_picks_the_animation() {
+    let mut stage = StageHarness::spawn();
+    stage.handshake();
+    stage.load_sample();
+    resize(&mut stage, 275, 200);
+
+    transport(&mut stage, None, 0.5, false);
+    let paused = stage.next_frame().pixels;
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(stage.next_frame().pixels == paused, "a paused stage draws the same frame");
+
+    transport(&mut stage, None, 1.5, false);
+    assert!(stage.next_frame().pixels != paused, "seeking moves the scene");
+
+    transport(&mut stage, Some(ids::STAGE_MAIN), 0.5, false);
+    assert!(stage.next_frame().pixels == paused, "`main` is the root's default animation");
+    transport(&mut stage, Some(backstage_core::AnimId::from_raw(1)), 0.5, false);
+    assert!(stage.next_frame().pixels != paused, "an animation the root doesn't have keys nothing");
+
+    transport(&mut stage, None, 0.5, true);
+    let first = stage.next_frame().pixels;
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(stage.next_frame().pixels != first, "a playing stage moves");
 }
 
 #[test]

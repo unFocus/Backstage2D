@@ -50,7 +50,7 @@ The design is recorded in [ADR 0004](adr/0004-commands-and-document-authority.md
 - [x] Bump `PROTOCOL_VERSION` (now 2)
 
 ### M3: editor panels on real data *(in progress)*
-- [ ] Timeline widget: one animation at a time, a row per node, and an animation picker. Scrubbing moves the stage's playhead. Time grid snapping.
+- [x] Timeline widget: one animation at a time, a row per node, and an animation picker. Scrubbing moves the stage's playhead. Time grid snapping. For now it covers the root composition, fits the animation to the panel width, and shows key marks per node without editing them. Protocol v3 adds `Transport`.
 - [ ] Library, properties, and layers panels
 - [x] Open, Save, and Save As (project folders), with a prompt for unsaved changes. Saving marks the recovery log as saved rather than clearing it, so undo still works after a save.
 - [x] Offer to restore unsaved edits from a recovery directory after an editor crash. Undo history comes back too. Orphans with nothing unsaved are cleaned up.
