@@ -2,14 +2,20 @@
 source: crates/backstage_protocol/src/lib.rs
 expression: out
 ---
-PROTOCOL_VERSION = 1
-Hello { version: 1 } => 0001
+PROTOCOL_VERSION = 2
+Hello { version: 2 } => 0002
 Resize { width: 1920, height: 1080, scale: 1.25 } => 01800fb808000000000000f43f
 Pointer(Some((10.5, 20.0))) => 0201000028410000a041
 Pointer(None) => 0200
 Shutdown => 03
-Hello { version: 1, pid: 4242, adapter: "gpu" } => 0001922103677075
+Load { base: Snapshot { files: [("project.ron", "()")] }, log: [Undo, Redo] } => 04010b70726f6a6563742e726f6e0228290b5b556e646f2c5265646f5d
+Submit { request: 7, entry: Undo } => 050704556e646f
+Hello { version: 2, pid: 4242, adapter: "gpu" } => 0002922103677075
 Surface { generation: 2, path: "/run/x", width: 640, height: 480, stride: 2560 } => 0102062f72756e2f788005e0038014
 FrameReady { generation: 2, slot: 1, seq: 300 } => 020201ac02
 Log("hi") => 03026869
 Heartbeat => 04
+Loaded { seq: 3, hash: 65261 } => 0503edfd03
+Committed { seq: 4, request: Some(7), entry: Undo } => 0604010704556e646f
+Committed { seq: 5, request: None, entry: Redo } => 060500045265646f
+Rejected { request: 8, reason: "no" } => 0708026e6f

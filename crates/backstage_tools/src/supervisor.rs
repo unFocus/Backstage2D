@@ -232,6 +232,8 @@ fn run_session(
             }
             ToTools::Heartbeat => emit(StageEvent::Alive),
             ToTools::Log(line) => emit(StageEvent::Log(line)),
+            // Document messages: the editor doesn't keep a copy yet (M2 step 5).
+            ToTools::Loaded { .. } | ToTools::Committed { .. } | ToTools::Rejected { .. } => {}
         }
     }
 }

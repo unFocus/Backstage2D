@@ -60,6 +60,9 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
   `FORMAT_VERSION` if old files would break.
 - Protocol changes show up in the insta wire snapshot. Bump
   `PROTOCOL_VERSION` with them.
+- Core types never go through postcard directly: they skip default fields,
+  which postcard can't read back. In protocol messages, document data uses
+  `#[serde(with = "ron_text")]` or a `Snapshot` (the project's files).
 - `evaluate` must stay pure and deterministic. An empty `RuntimeState` is
   valid.
 

@@ -40,11 +40,11 @@ defined in [ADR 0003](adr/0003-document-model.md).
 ### M2: edit commands and crash recovery with no lost work *(next)*
 - [x] `Command` type in core: apply returns the inverse, failures change nothing, results stay valid
 - [x] Undo/redo log: `Document` (project, history, sequence number) changed only by `Entry`s (do, undo, redo), replay, and a document hash
-- [ ] Protocol: document snapshot on connect, edit commands in both directions
+- [x] Protocol: document snapshot on connect, edit commands in both directions
 - [ ] The stage is the only writer: it applies each command, numbers it, and sends it out
 - [ ] The editor keeps a copy of the document and autosaves the command log
 - [ ] On a stage restart, the editor sends the snapshot and replays the log. Test: replay gives an identical document.
-- [ ] Bump `PROTOCOL_VERSION`
+- [x] Bump `PROTOCOL_VERSION` (now 2)
 
 ### M3: editor panels on real data
 - [ ] Timeline widget: one animation at a time, a row per node, and an animation picker. Scrubbing moves the stage's playhead. Time grid snapping.

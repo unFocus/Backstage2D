@@ -153,6 +153,7 @@ dependencies = [
 name = "backstage_protocol"
 version = "0.1.0"
 dependencies = [
+ "backstage_core",
  "insta",
  "memmap2",
  "postcard",

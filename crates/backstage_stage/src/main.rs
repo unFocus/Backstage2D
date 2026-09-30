@@ -104,6 +104,8 @@ fn run() -> Result<()> {
                     target = Some(t);
                 }
                 Ok(ToStage::Pointer(p)) => pointer = p,
+                // Document messages: handled once the stage owns the document (M2 step 4).
+                Ok(ToStage::Load { .. } | ToStage::Submit { .. }) => {}
                 Ok(ToStage::Shutdown) | Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
                 Err(mpsc::TryRecvError::Empty) => break,
             }

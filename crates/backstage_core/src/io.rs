@@ -172,6 +172,21 @@ fn parse<T: for<'de> Deserialize<'de>>(path: &Path, text: &str) -> Result<T, Loa
 
 /// Loads and validates the project in `dir`.
 pub fn load(dir: &Path) -> Result<Project, LoadError> {
+    load_with(dir, read)
+}
+
+/// Loads and validates a project from files made by [`to_files`].
+pub fn from_files(files: &[(PathBuf, String)]) -> Result<Project, LoadError> {
+    load_with(Path::new(""), |path| {
+        files
+            .iter()
+            .find(|(p, _)| p == path)
+            .map(|(_, text)| text.clone())
+            .ok_or_else(|| LoadError::Io { path: path.to_owned(), source: io::ErrorKind::NotFound.into() })
+    })
+}
+
+fn load_with(dir: &Path, read: impl Fn(&Path) -> Result<String, LoadError>) -> Result<Project, LoadError> {
     let project_path = dir.join(PROJECT_FILE);
     let text = read(&project_path)?;
     // Check the version before the full parse, so a newer format gets a
@@ -261,6 +276,18 @@ mod tests {
         expected.sort();
         assert_eq!(files(&dir), expected);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn from_files_reads_what_to_files_writes() {
+        let project = sample::bounce();
+        let mut files = to_files(&project).unwrap();
+        assert_eq!(from_files(&files).unwrap(), project);
+
+        files.retain(|(p, _)| !p.starts_with(COMPOSITIONS_DIR));
+        let err = from_files(&files).unwrap_err();
+        assert!(matches!(err, LoadError::Io { .. }), "{err}");
+        assert!(err.to_string().starts_with("compositions/"), "{err}");
     }
 
     #[test]
