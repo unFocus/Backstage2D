@@ -3,7 +3,7 @@
 
 mod common;
 
-use backstage_protocol::ToStage;
+use backstage_protocol::{Snapshot, ToStage};
 use backstage_tools::supervisor::{self, StageEvent, Supervisor};
 use std::path::Path;
 use std::sync::Once;
@@ -47,6 +47,12 @@ fn wait_for<T>(events: &Events, mut f: impl FnMut(u64, StageEvent) -> Option<T>)
     }
 }
 
+/// Sends the sample project; the stage shows nothing without a document.
+fn load_sample(sup: &Supervisor) {
+    let base = Snapshot::of(&backstage_core::sample::bounce()).unwrap();
+    sup.send(&ToStage::Load { base, log: Vec::new() });
+}
+
 fn connected_pid(events: &Events, session: u64) -> u32 {
     wait_for(events, |s, e| match e {
         StageEvent::Connected { pid, .. } if s == session => Some(pid),
@@ -70,6 +76,7 @@ fn streams_frames_to_take_frame() {
     let mut sup = Supervisor::new(common::stage_binary());
     let (session, events) = start(&mut sup);
     connected_pid(&events, session);
+    load_sample(&sup);
     sup.send(&ToStage::Resize { width: 200, height: 100, scale: 1.0 });
     wait_for(&events, |_, e| matches!(e, StageEvent::FrameAvailable).then_some(()));
     let frame = sup.take_frame().expect("frame after FrameAvailable");
@@ -84,6 +91,7 @@ fn kill_reports_exit_and_cleans_up_rings() {
     let mut sup = Supervisor::new(common::stage_binary());
     let (session, events) = start(&mut sup);
     let pid = connected_pid(&events, session);
+    load_sample(&sup);
     sup.send(&ToStage::Resize { width: 64, height: 64, scale: 1.0 });
     wait_for(&events, |_, e| matches!(e, StageEvent::FrameAvailable).then_some(()));
     assert!(!rings_of(pid).is_empty());

@@ -2,11 +2,14 @@
 //! frames to the tools process through a shared-memory ring.
 //!
 //! Started by `backstage_tools` as `backstage_stage --socket <path>`. Exits
-//! when the socket closes, so it never outlives its tools process. See
-//! `docs/adr/0002-stage-process-isolation.md`.
+//! when the socket closes, so it never outlives its tools process. The
+//! document arrives with `Load`; the stage is its only writer (see
+//! [`host`]). See `docs/adr/0002-stage-process-isolation.md`.
+
+mod host;
 
 use anyhow::{Context, Result, bail};
-use backstage_core::{Project, RuntimeState, Time, evaluate};
+use backstage_core::{RuntimeState, Time, evaluate};
 use backstage_protocol::{
     FRAME_SLOTS, FrameRing, PROTOCOL_VERSION, ToStage, ToTools, read_message, write_message,
 };
@@ -34,20 +37,12 @@ fn is_disconnect(e: &anyhow::Error) -> bool {
 }
 
 fn run() -> Result<()> {
-    let Args { socket: socket_path, project: project_dir } = parse_args(std::env::args().skip(1))?;
+    let Args { socket: socket_path } = parse_args(std::env::args().skip(1))?;
     let mut socket = UnixStream::connect(&socket_path)
         .with_context(|| format!("connecting to {}", socket_path.display()))?;
     let inbox = spawn_reader(socket.try_clone()?);
 
-    let project = match load_project(project_dir.as_deref()) {
-        Ok(project) => project,
-        Err(e) => {
-            // Tell the tools process why, then fail (its supervisor decides
-            // whether to retry).
-            let _ = write_message(&mut socket, &ToTools::Log(format!("{e:#}")));
-            return Err(e);
-        }
-    };
+    let mut host = host::DocumentHost::default();
     let state = RuntimeState::default();
 
     let gpu = pollster::block_on(HeadlessGpu::new("stage"))
@@ -104,18 +99,38 @@ fn run() -> Result<()> {
                     target = Some(t);
                 }
                 Ok(ToStage::Pointer(p)) => pointer = p,
-                // Document messages: handled once the stage owns the document (M2 step 4).
-                Ok(ToStage::Load { .. } | ToStage::Submit { .. }) => {}
+                Ok(ToStage::Load { base, log }) => match host.load(&base, &log) {
+                    Ok(reply) => {
+                        renderer.clear_cache();
+                        write_message(&mut socket, &reply)?;
+                    }
+                    Err(e) => {
+                        // Tell the tools process why, then fail (its
+                        // supervisor decides whether to retry).
+                        let _ = write_message(&mut socket, &ToTools::Log(e.clone()));
+                        bail!(e);
+                    }
+                },
+                Ok(ToStage::Submit { request, entry }) => {
+                    let reply = host.submit(request, &entry);
+                    if matches!(reply, ToTools::Committed { .. }) {
+                        // Meshes are cached by shape address, which adding or
+                        // removing nodes can move or reuse.
+                        renderer.clear_cache();
+                    }
+                    write_message(&mut socket, &reply)?;
+                }
                 Ok(ToStage::Shutdown) | Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
                 Err(mpsc::TryRecvError::Empty) => break,
             }
         }
 
-        if let Some(t) = target.as_mut() {
+        // Nothing to show until the document arrives.
+        if let (Some(t), Some(project)) = (target.as_mut(), host.project()) {
             let now = Time::from_ratio(started.elapsed().as_nanos() as i64, 1_000_000_000);
-            let scene = evaluate(&project, &state, now);
+            let scene = evaluate(project, &state, now);
             let frame = Frame {
-                project: &project,
+                project,
                 scene: &scene,
                 scale: scale as f32,
                 pointer,
@@ -140,36 +155,25 @@ fn run() -> Result<()> {
     }
 }
 
-/// Command-line arguments: `--socket <path> [--project <dir>]`.
+/// Command-line arguments: `--socket <path>`.
 #[derive(Debug, PartialEq)]
 struct Args {
     socket: PathBuf,
-    project: Option<PathBuf>,
 }
 
 fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args> {
-    let usage = "usage: backstage_stage --socket <path> [--project <dir>]";
-    let (mut socket, mut project) = (None, None);
+    let usage = "usage: backstage_stage --socket <path>";
+    let mut socket = None;
     while let Some(flag) = args.next() {
-        let slot = match flag.as_str() {
-            "--socket" => &mut socket,
-            "--project" => &mut project,
-            _ => bail!("unknown argument {flag:?}; {usage}"),
-        };
+        if flag != "--socket" {
+            bail!("unknown argument {flag:?}; {usage}");
+        }
         let value = args.next().with_context(|| format!("{flag} needs a value; {usage}"))?;
-        if slot.replace(PathBuf::from(value)).is_some() {
+        if socket.replace(PathBuf::from(value)).is_some() {
             bail!("{flag} given twice; {usage}");
         }
     }
-    Ok(Args { socket: socket.context(usage)?, project })
-}
-
-/// The project to show: loaded from `dir`, or the built-in sample.
-fn load_project(dir: Option<&std::path::Path>) -> Result<Project> {
-    match dir {
-        Some(dir) => backstage_core::load(dir).with_context(|| format!("loading project {}", dir.display())),
-        None => Ok(backstage_core::sample::bounce()),
-    }
+    Ok(Args { socket: socket.context(usage)? })
 }
 
 /// Forwards incoming messages to the main loop. The channel disconnects when
@@ -243,14 +247,10 @@ mod tests {
     }
 
     #[test]
-    fn parses_socket_and_optional_project() {
+    fn parses_socket() {
         assert_eq!(
             parse_args(args(&["--socket", "/run/x.sock"])).unwrap(),
-            Args { socket: PathBuf::from("/run/x.sock"), project: None }
-        );
-        assert_eq!(
-            parse_args(args(&["--project", "p.bs2d", "--socket", "/s"])).unwrap(),
-            Args { socket: PathBuf::from("/s"), project: Some(PathBuf::from("p.bs2d")) }
+            Args { socket: PathBuf::from("/run/x.sock") }
         );
     }
 
@@ -261,7 +261,7 @@ mod tests {
             &["--socket"],
             &["--sock", "/x"],
             &["--socket", "/x", "extra"],
-            &["--project", "p"],
+            &["--project", "p", "--socket", "/s"],
             &["--socket", "/a", "--socket", "/b"],
         ] {
             assert!(parse_args(args(bad)).is_err(), "{bad:?}");

@@ -31,7 +31,8 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
 ```
 - `BACKSTAGE_WGPU_FALLBACK=1` forces the software renderer (lavapipe). Tests
   set it.
-- `BACKSTAGE_PROJECT=<dir>` makes the editor's stage load that project.
+- `BACKSTAGE_PROJECT=<dir>` makes the editor open that project (it sends it
+  to the stage with `Load`; the stage takes no project argument).
 
 ## Architecture rules (enforced by `dependency_boundaries.rs`)
 - `backstage_core` is pure data and logic. No GPU, GUI, windowing, or lyon.

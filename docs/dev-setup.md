@@ -52,14 +52,14 @@ The editor starts `backstage_stage` from the same `target/` directory. The
 stage logs the GPU it picked, for example
 `backstage_stage: using AMD Radeon RX 6800 (RADV NAVI21) (Vulkan)`.
 
-By default the stage shows the built-in bounce sample. To show a different
-project directory:
+By default the editor opens the built-in bounce sample. To open a
+different project directory:
 ```sh
 BACKSTAGE_PROJECT=samples/bounce.bs2d cargo run -p backstage_tools
 ```
-This is a stopgap until File → Open (M3). A project that fails to load is
-reported by the stage, and the editor stops retrying after a few quick
-failures.
+This is a stopgap until File → Open (M3). The editor loads the project and
+sends it to the stage every time the stage (re)starts. A project that fails
+to load is shown in a banner, and no stage is started.
 
 Runtime files (the socket and frame rings) live in
 `$XDG_RUNTIME_DIR/backstage2d/`. Files left by processes that died are

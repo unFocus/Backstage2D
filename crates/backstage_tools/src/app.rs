@@ -5,14 +5,20 @@ use crate::panels;
 use crate::smoke::SmokeTest;
 use crate::stage_view::StageView;
 use crate::supervisor::{StageEvent, Supervisor};
-use backstage_protocol::ToStage;
+use backstage_protocol::{Snapshot, ToStage};
 use gtk::{gdk, glib, prelude::*};
 use relm4::prelude::*;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+/// Project directory to edit; unset means the built-in sample. A stopgap
+/// until File → Open (M3).
+pub const PROJECT_ENV: &str = "BACKSTAGE_PROJECT";
+
 pub struct App {
     supervisor: Supervisor,
+    /// The document sent to every stage when it connects.
+    base: Option<Snapshot>,
     stage_view: StageView,
     health: StageHealth,
     smoke: Option<SmokeTest>,
@@ -131,8 +137,13 @@ impl SimpleComponent for App {
 
     fn init(stage_binary: PathBuf, root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
         relm4::set_global_css(CSS);
-        let model = App {
+        let (base, load_error) = match load_base() {
+            Ok(base) => (Some(base), None),
+            Err(e) => (None, Some(e)),
+        };
+        let mut model = App {
             supervisor: Supervisor::new(stage_binary),
+            base,
             stage_view: StageView::default(),
             health: StageHealth::new(Instant::now()),
             smoke: SmokeTest::from_env(),
@@ -159,7 +170,13 @@ impl SimpleComponent for App {
                 std::process::exit(1);
             });
         }
-        sender.input(AppMsg::RestartStage);
+        match load_error {
+            None => sender.input(AppMsg::RestartStage),
+            Some(e) => {
+                model.status = "No project".into();
+                model.banner = Some(format!("Could not open the project:\n{e}"));
+            }
+        }
 
         ComponentParts { model, widgets }
     }
@@ -209,7 +226,11 @@ impl App {
                 self.health.connected(Instant::now());
                 self.banner = None;
                 self.status = format!("Stage pid {pid} · {adapter}");
-                // The new stage knows nothing yet: send it the current state.
+                // The new stage knows nothing yet: send it the document and
+                // the current view state.
+                if let Some(base) = &self.base {
+                    self.supervisor.send(&ToStage::Load { base: base.clone(), log: Vec::new() });
+                }
                 if let Some((width, height, scale)) = self.stage_view.stage_size() {
                     self.supervisor.send(&ToStage::Resize { width, height, scale });
                 }
@@ -250,6 +271,19 @@ impl App {
             }
         }
     }
+}
+
+/// The project to edit, from `BACKSTAGE_PROJECT` or the built-in sample.
+fn load_base() -> anyhow::Result<Snapshot> {
+    use anyhow::Context;
+    let project = match std::env::var_os(PROJECT_ENV) {
+        Some(dir) => {
+            let dir = PathBuf::from(dir);
+            backstage_core::load(&dir).with_context(|| format!("{}", dir.display()))?
+        }
+        None => backstage_core::sample::bounce(),
+    };
+    Ok(Snapshot::of(&project)?)
 }
 
 const CSS: &str = "

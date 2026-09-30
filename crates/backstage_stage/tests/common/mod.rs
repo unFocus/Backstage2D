@@ -3,7 +3,10 @@
 
 #![allow(dead_code)] // each test binary uses a different subset
 
-use backstage_protocol::{FrameRing, PROTOCOL_VERSION, ToStage, ToTools, read_message, write_message};
+use backstage_core::Entry;
+use backstage_protocol::{
+    FrameRing, PROTOCOL_VERSION, Snapshot, ToStage, ToTools, read_message, write_message,
+};
 use std::io;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -94,6 +97,34 @@ impl StageHarness {
             }
             other => panic!("expected Hello, got {other:?}"),
         }
+    }
+
+    /// Sends `Load` and returns the `(seq, hash)` of the stage's `Loaded`.
+    pub fn load(&mut self, base: Snapshot, log: Vec<Entry>) -> (u64, u64) {
+        self.send(&ToStage::Load { base, log });
+        self.recv_until(|m| match m {
+            ToTools::Loaded { seq, hash } => Some((*seq, *hash)),
+            _ => None,
+        })
+    }
+
+    /// Loads the built-in sample project with no log.
+    pub fn load_sample(&mut self) {
+        self.load(Snapshot::of(&backstage_core::sample::bounce()).unwrap(), vec![]);
+    }
+
+    /// Submits an entry and returns the stage's `Committed` or `Rejected`
+    /// for it.
+    pub fn submit(&mut self, request: u64, entry: Entry) -> ToTools {
+        self.send(&ToStage::Submit { request, entry });
+        self.recv_until(|m| match m {
+            ToTools::Committed { request: Some(r), .. } | ToTools::Rejected { request: r, .. }
+                if *r == request =>
+            {
+                Some(m.clone())
+            }
+            _ => None,
+        })
     }
 
     /// Receives messages until `f` returns `Some`, tracking the current ring.
