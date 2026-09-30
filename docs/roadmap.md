@@ -44,7 +44,8 @@ defined in [ADR 0003](adr/0003-document-model.md).
 - [x] The stage is the only writer: it applies each command, numbers it, and sends it out
 - [x] The editor keeps a copy of the document and autosaves the command log (restoring it after an editor crash is part of M3's Open/Save)
 - [x] On a stage restart, the editor sends the snapshot and replays the log. Test: replay gives an identical document (`a_restarted_stage_replays_the_editors_log`)
-- [ ] Undo/Redo and a temporary debug edit in the editor, exercised by the UI smoke test
+- [x] Undo/Redo and a temporary debug edit in the editor, exercised by the UI smoke test
+- [ ] ADR 0004: the command and document design
 - [x] Bump `PROTOCOL_VERSION` (now 2)
 
 ### M3: editor panels on real data

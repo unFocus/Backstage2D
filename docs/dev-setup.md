@@ -65,6 +65,11 @@ Runtime files (the socket and frame rings) live in
 `$XDG_RUNTIME_DIR/backstage2d/`. Files left by processes that died are
 cleaned up the next time the editor starts.
 
+Undo and Redo are Ctrl+Z and Ctrl+Shift+Z (or the header buttons). Until
+on-stage editing arrives (M4), the arrow keys are a debug edit: they move
+the root composition's first node (the ground in the sample) by 10 px, or
+1 px with Shift. The title shows • once there are edits.
+
 Every committed edit is autosaved to
 `$XDG_STATE_HOME/backstage2d/recovery/<pid>-<unix time>/` (usually under
 `~/.local/state`): `base.bs2d/` is the project as opened and `log.ron` holds

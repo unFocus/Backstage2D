@@ -24,7 +24,7 @@ It takes about 1.5 minutes on the dev host with a warm build cache. Tests need *
 | Regression: wire format | `crates/backstage_protocol/src/snapshots/` (insta) | Byte encoding of every protocol message |
 | Regression: architecture | `crates/backstage_tools/tests/dependency_boundaries.rs` | Runtime crates never link GTK/Relm4. The tools crate never links wgpu, lyon, the renderer, or the VM. The core crate stays free of GPU/GUI crates. |
 | Player smoke | `crates/backstage_player/tests/player_smoke.rs` (ignored by default) | The player opens a Wayland window in headless cage and presents 30 frames |
-| UI smoke | `crates/backstage_tools/tests/ui_smoke.rs` (ignored by default) | The real editor in headless cage: frames arrive, the stage is killed, it restarts, and frames arrive again |
+| UI smoke | `crates/backstage_tools/tests/ui_smoke.rs` (ignored by default) | The real editor in headless cage, driven by `src/smoke.rs` through the same paths as the user: frames arrive, a nudge is committed, the stage is killed, the restarted stage replays the log into a matching document, and an undo commits on it |
 | Probe | `latency_probe` in `stage_protocol.rs` (ignored) | Pointer → published frame latency (prints numbers, asserts nothing) |
 
 ## Updating reference data
