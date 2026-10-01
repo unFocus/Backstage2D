@@ -7,6 +7,7 @@
 pub mod app;
 pub mod health;
 pub mod panels;
+pub mod properties;
 pub mod recovery;
 pub mod smoke;
 pub mod stage_view;

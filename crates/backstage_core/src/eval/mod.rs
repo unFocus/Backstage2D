@@ -14,7 +14,7 @@ pub use scene::{DrawContent, DrawItem, Scene};
 use crate::animation::{Animation, Property, Track, Value};
 use crate::geom::{ColorTransform, Transform};
 use crate::id::{CompId, NodeId};
-use crate::node::{NodeKind, Props, Repeat, TimeMode};
+use crate::node::{NodeKind, Repeat, TimeMode};
 use crate::project::{Composition, Project};
 use crate::time::Time;
 use glam::{Affine2, Mat2, Vec2};
@@ -175,7 +175,7 @@ impl<'p> Evaluator<'p, '_> {
                     TimeMode::Synced { offset, .. } => Value::Time(offset),
                     TimeMode::Free { .. } => continue,
                 },
-                _ => get(&props, *property),
+                _ => props.get(*property),
             };
             let Some(value) = blend::blend(*property, rest, contributions) else { continue };
             if *property == Property::TimeOffset {
@@ -183,7 +183,7 @@ impl<'p> Evaluator<'p, '_> {
                     time_offset = Some(t);
                 }
             } else {
-                apply(&mut props, *property, value);
+                props.set(*property, value);
             }
         }
         if !props.visible {
@@ -243,52 +243,6 @@ impl<'p> Evaluator<'p, '_> {
         for &child in &node.children {
             self.node(frame, child, &here);
         }
-    }
-}
-
-/// Reads a property's current value.
-fn get(props: &Props, property: Property) -> Value {
-    let t = &props.transform;
-    match property {
-        Property::X => Value::Number(t.position.x),
-        Property::Y => Value::Number(t.position.y),
-        Property::Rotation => Value::Number(t.rotation),
-        Property::ScaleX => Value::Number(t.scale.x),
-        Property::ScaleY => Value::Number(t.scale.y),
-        Property::SkewX => Value::Number(t.skew.x),
-        Property::SkewY => Value::Number(t.skew.y),
-        Property::PivotX => Value::Number(t.pivot.x),
-        Property::PivotY => Value::Number(t.pivot.y),
-        Property::Opacity => Value::Number(props.opacity),
-        Property::ColorMultiply => Value::Rgba(props.color.multiply),
-        Property::ColorAdd => Value::Rgba(props.color.add),
-        Property::Visible => Value::Bool(props.visible),
-        Property::Blend => Value::Blend(props.blend),
-        Property::Drawing => Value::Index(props.drawing),
-        Property::TimeOffset => Value::Time(Time::ZERO),
-    }
-}
-
-/// Writes a sampled track value into the node's properties.
-fn apply(props: &mut Props, property: Property, value: Value) {
-    let t = &mut props.transform;
-    match (property, value) {
-        (Property::X, Value::Number(v)) => t.position.x = v,
-        (Property::Y, Value::Number(v)) => t.position.y = v,
-        (Property::Rotation, Value::Number(v)) => t.rotation = v,
-        (Property::ScaleX, Value::Number(v)) => t.scale.x = v,
-        (Property::ScaleY, Value::Number(v)) => t.scale.y = v,
-        (Property::SkewX, Value::Number(v)) => t.skew.x = v,
-        (Property::SkewY, Value::Number(v)) => t.skew.y = v,
-        (Property::PivotX, Value::Number(v)) => t.pivot.x = v,
-        (Property::PivotY, Value::Number(v)) => t.pivot.y = v,
-        (Property::Opacity, Value::Number(v)) => props.opacity = v,
-        (Property::ColorMultiply, Value::Rgba(v)) => props.color.multiply = v,
-        (Property::ColorAdd, Value::Rgba(v)) => props.color.add = v,
-        (Property::Visible, Value::Bool(v)) => props.visible = v,
-        (Property::Blend, Value::Blend(v)) => props.blend = v,
-        (Property::Drawing, Value::Index(v)) => props.drawing = v,
-        _ => {} // Mismatched kinds are rejected by validation.
     }
 }
 

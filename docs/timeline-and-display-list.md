@@ -89,6 +89,27 @@ Implemented in `backstage_core::eval`.
   objects. Objects created by scripts live in the runtime state, under a
   parent path, until the script removes them.
 
+## Editor panels
+- **Structure and time are separate.** The node tree is fixed and
+  animations only key properties: nothing enters or leaves by playhead
+  position. So the tree's structure (order, grouping, names,
+  hide/lock/outline) belongs in a **Layers** outliner, which works the same
+  whatever animation is shown. The **timeline** mirrors the same tree, with
+  synced expand state and selection, and shows one animation's keys. (This
+  is Rive's and Spine's arrangement. In Flash a layer's content changed per
+  keyframe, so layers and time had to share one interface.)
+- **Selection** is one node of the composition being edited. It is set from
+  the timeline (and the layers panel; on stage in M4), and cleared with
+  Escape or a click below the rows.
+- **Properties** shows the selected node's *rest* values, or the document
+  settings when nothing is selected. Every change is a command (`SetRest`,
+  `RenameNode`, `SetSettings`), so it's undoable. A property the shown
+  animation keys is marked ◆: editing it changes the rest value, not the
+  keys. (Key editing comes later.)
+- **Keyboard:** the window-level shortcuts (Enter, Escape, arrows, Ctrl+Z)
+  step aside while a text field or spin button has focus, or a popover is
+  open, so those keep their own keys.
+
 ## Editing aids (not playback)
 - **Time grid:** keys and the timeline's playhead snap to N ticks per
   second (default 60; 30 for classic games). The timeline's Snap toggle and

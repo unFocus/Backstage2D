@@ -1,7 +1,7 @@
 //! Animations: named, time-based keyframe tracks over a composition's nodes.
 
 use crate::id::NodeId;
-use crate::node::BlendMode;
+use crate::node::{BlendMode, NodeKind, TimeMode};
 use crate::time::Time;
 use serde::{Deserialize, Serialize};
 
@@ -135,6 +135,18 @@ impl Property {
             Property::Blend => ValueKind::Blend,
             Property::Drawing => ValueKind::Index,
             Property::TimeOffset => ValueKind::Time,
+        }
+    }
+
+    /// Whether nodes of this kind have the property: a flipbook drawing
+    /// only on flipbooks, a time offset only on synced instances.
+    pub fn applies_to(self, kind: &NodeKind) -> bool {
+        match self {
+            Property::Drawing => matches!(kind, NodeKind::Flipbook(_)),
+            Property::TimeOffset => {
+                matches!(kind, NodeKind::Instance(i) if matches!(i.time, TimeMode::Synced { .. }))
+            }
+            _ => true,
         }
     }
 

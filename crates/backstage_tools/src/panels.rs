@@ -1,5 +1,6 @@
 //! Placeholder panels. They show the intended layout; none of them are wired
-//! to a document yet. (The timeline is real: see `timeline.rs`.)
+//! to a document yet. (The timeline and properties are real: see `timeline.rs`
+//! and `properties.rs`.)
 
 use gtk::prelude::*;
 use relm4::gtk;
@@ -39,32 +40,4 @@ pub fn library() -> gtk::Box {
     scroller.set_child(Some(&list));
     scroller.set_vexpand(true);
     panel("Library", &scroller)
-}
-
-pub fn properties() -> gtk::Box {
-    let grid = gtk::Grid::new();
-    grid.set_row_spacing(6);
-    grid.set_column_spacing(12);
-    grid.set_margin_start(8);
-    grid.set_margin_end(8);
-    grid.set_margin_top(8);
-    let (w, h) = (550, 400); // backstage_render::STAGE_SIZE; tools doesn't link the renderer
-    for (row, (key, value)) in [
-        ("Document", "Untitled".to_string()),
-        ("Stage", format!("{w} × {h}")),
-        ("Frame rate", "24 fps".into()),
-        ("Background", "#FFFFFF".into()),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let key = gtk::Label::new(Some(key));
-        key.set_xalign(1.0);
-        key.add_css_class("dim-label");
-        let value = gtk::Label::new(Some(&value));
-        value.set_xalign(0.0);
-        grid.attach(&key, 0, row as i32, 1, 1);
-        grid.attach(&value, 1, row as i32, 1, 1);
-    }
-    panel("Properties", &grid)
 }

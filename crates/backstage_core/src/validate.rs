@@ -210,16 +210,6 @@ fn check_nodes(project: &Project, comp: &Composition, errors: &mut Vec<Validatio
     }
 }
 
-fn applies_to(property: Property, kind: &NodeKind) -> bool {
-    match property {
-        Property::Drawing => matches!(kind, NodeKind::Flipbook(_)),
-        Property::TimeOffset => {
-            matches!(kind, NodeKind::Instance(i) if matches!(i.time, TimeMode::Synced { .. }))
-        }
-        _ => true,
-    }
-}
-
 fn check_animations(comp: &Composition, errors: &mut Vec<ValidationError>) {
     let c = comp.id;
     for (&a, anim) in &comp.animations {
@@ -243,7 +233,7 @@ fn check_animations(comp: &Composition, errors: &mut Vec<ValidationError>) {
                 errors.push(ValidationError::TrackMissingNode { comp: c, anim: a, node });
                 continue;
             };
-            if !applies_to(property, &target.kind) {
+            if !property.applies_to(&target.kind) {
                 errors.push(ValidationError::PropertyNotApplicable { comp: c, anim: a, node, property });
             }
             if track.keys.is_empty() {

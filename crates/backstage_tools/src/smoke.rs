@@ -1,7 +1,8 @@
 //! Self-driving smoke test for headless UI runs. See `tests/ui_smoke.rs`.
 //!
 //! - `BACKSTAGE_SMOKE=1` runs the editing loop in the real editor, through
-//!   the same paths as the user: wait for frames, scrub the timeline, nudge, kill the stage once
+//!   the same paths as the user: wait for frames, scrub the timeline, select
+//!   the first node, nudge, kill the stage once
 //!   the edit is committed, check the restarted stage replayed it, save, then
 //!   undo and exit 0 without cleaning up, like a crash. That leaves unsaved
 //!   edits (the undo) in the recovery directory.
@@ -24,6 +25,8 @@ const FRAMES_PER_PHASE: u32 = 30;
 pub enum SmokeStep {
     /// Scrub the timeline to this time.
     Scrub(Time),
+    /// Select the first node, as a click on its timeline row does.
+    Select,
     Nudge,
     Save,
     Restore,
@@ -39,6 +42,8 @@ enum Phase {
     FirstFrames(u32),
     /// Asked to scrub.
     AwaitScrub,
+    /// Asked to select.
+    AwaitSelect,
     /// Nudged; waiting for the commit.
     AwaitNudge,
     /// Killed; waiting for a new stage to replay the log.
@@ -148,9 +153,23 @@ impl SmokeTest {
         if self.phase != Phase::AwaitScrub {
             return Some(SmokeStep::Fail(format!("unexpected scrub in phase {:?}", self.phase)));
         }
-        eprintln!("smoke: scrubbed, nudging");
-        self.phase = Phase::AwaitNudge;
-        Some(SmokeStep::Nudge)
+        eprintln!("smoke: scrubbed, selecting");
+        self.phase = Phase::AwaitSelect;
+        Some(SmokeStep::Select)
+    }
+
+    /// The selection was made; `ok` if a node is selected.
+    pub fn selected(&mut self, ok: bool) -> Option<SmokeStep> {
+        match (&self.phase, ok) {
+            (Phase::AwaitSelect, true) => {
+                eprintln!("smoke: selected, nudging");
+                self.phase = Phase::AwaitNudge;
+                Some(SmokeStep::Nudge)
+            }
+            (phase, ok) => {
+                Some(SmokeStep::Fail(format!("unexpected selection (ok: {ok}) in phase {phase:?}")))
+            }
+        }
     }
 
     /// A save finished; `ok` if the project was written.
@@ -210,7 +229,8 @@ mod tests {
         let mut smoke = SmokeTest::new();
         assert_eq!(smoke.loaded(1, ok(0)), None);
         assert_eq!(frames(&mut smoke, 1, FRAMES_PER_PHASE), [SmokeStep::Scrub(Time::from_secs(1))]);
-        assert_eq!(smoke.scrubbed(), Some(SmokeStep::Nudge));
+        assert_eq!(smoke.scrubbed(), Some(SmokeStep::Select));
+        assert_eq!(smoke.selected(true), Some(SmokeStep::Nudge));
         assert_eq!(smoke.committed(1), Some(SmokeStep::Kill));
         // Frames still in flight from the killed stage don't count.
         assert_eq!(frames(&mut smoke, 1, FRAMES_PER_PHASE), []);
@@ -230,6 +250,7 @@ mod tests {
         let mut smoke = SmokeTest::new();
         frames(&mut smoke, 1, FRAMES_PER_PHASE);
         smoke.scrubbed();
+        smoke.selected(true);
         smoke.committed(1);
         assert!(matches!(smoke.loaded(2, ok(0)), Some(SmokeStep::Fail(_))), "the edit was lost");
     }

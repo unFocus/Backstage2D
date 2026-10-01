@@ -51,7 +51,10 @@ The design is recorded in [ADR 0004](adr/0004-commands-and-document-authority.md
 
 ### M3: editor panels on real data *(in progress)*
 - [x] Timeline widget: one animation at a time, a row per node, and an animation picker. Scrubbing moves the stage's playhead. Time grid snapping. For now it covers the root composition, fits the animation to the panel width, and shows key marks per node without editing them. Protocol v3 adds `Transport`.
-- [ ] Library, properties, and layers panels
+- Library, properties, and layers panels, in three steps:
+  - [x] Selection and the Properties panel: the selected node's rest values (or the document settings when nothing is selected), edited through commands. Clicking a timeline row selects.
+  - [ ] Layers panel (outliner) owning the tree, rename, and hide/lock/outline (saved as editor-only flags). The timeline mirrors its expand state and selection.
+  - [ ] Library panel, and entering a composition: the stage, timeline, and layers switch to it, with a breadcrumb back
 - [x] Open, Save, and Save As (project folders), with a prompt for unsaved changes. Saving marks the recovery log as saved rather than clearing it, so undo still works after a save.
 - [x] Offer to restore unsaved edits from a recovery directory after an editor crash. Undo history comes back too. Orphans with nothing unsaved are cleaned up.
 

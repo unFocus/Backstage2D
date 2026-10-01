@@ -1,5 +1,6 @@
 //! Nodes: the fixed content tree of a composition.
 
+use crate::animation::{Property, Value};
 use crate::geom::{ColorTransform, Transform};
 use crate::id::{AnimId, AssetId, CompId, DrawingId, NodeId};
 use crate::shape::Shape;
@@ -132,6 +133,55 @@ impl Props {
     pub fn at(x: f32, y: f32) -> Self {
         Self { transform: Transform::at(x, y), ..Self::default() }
     }
+
+    /// The value of `property` in these properties.
+    pub fn get(&self, property: Property) -> Value {
+        let props = self;
+        let t = &props.transform;
+        match property {
+            Property::X => Value::Number(t.position.x),
+            Property::Y => Value::Number(t.position.y),
+            Property::Rotation => Value::Number(t.rotation),
+            Property::ScaleX => Value::Number(t.scale.x),
+            Property::ScaleY => Value::Number(t.scale.y),
+            Property::SkewX => Value::Number(t.skew.x),
+            Property::SkewY => Value::Number(t.skew.y),
+            Property::PivotX => Value::Number(t.pivot.x),
+            Property::PivotY => Value::Number(t.pivot.y),
+            Property::Opacity => Value::Number(props.opacity),
+            Property::ColorMultiply => Value::Rgba(props.color.multiply),
+            Property::ColorAdd => Value::Rgba(props.color.add),
+            Property::Visible => Value::Bool(props.visible),
+            Property::Blend => Value::Blend(props.blend),
+            Property::Drawing => Value::Index(props.drawing),
+            Property::TimeOffset => Value::Time(Time::ZERO),
+        }
+    }
+
+    /// Sets `property` to `value`. A value of the wrong kind for the
+    /// property changes nothing.
+    pub fn set(&mut self, property: Property, value: Value) {
+        let props = self;
+        let t = &mut props.transform;
+        match (property, value) {
+            (Property::X, Value::Number(v)) => t.position.x = v,
+            (Property::Y, Value::Number(v)) => t.position.y = v,
+            (Property::Rotation, Value::Number(v)) => t.rotation = v,
+            (Property::ScaleX, Value::Number(v)) => t.scale.x = v,
+            (Property::ScaleY, Value::Number(v)) => t.scale.y = v,
+            (Property::SkewX, Value::Number(v)) => t.skew.x = v,
+            (Property::SkewY, Value::Number(v)) => t.skew.y = v,
+            (Property::PivotX, Value::Number(v)) => t.pivot.x = v,
+            (Property::PivotY, Value::Number(v)) => t.pivot.y = v,
+            (Property::Opacity, Value::Number(v)) => props.opacity = v,
+            (Property::ColorMultiply, Value::Rgba(v)) => props.color.multiply = v,
+            (Property::ColorAdd, Value::Rgba(v)) => props.color.add = v,
+            (Property::Visible, Value::Bool(v)) => props.visible = v,
+            (Property::Blend, Value::Blend(v)) => props.blend = v,
+            (Property::Drawing, Value::Index(v)) => props.drawing = v,
+            _ => {} // Mismatched kinds are rejected by validation.
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -155,4 +205,46 @@ fn is_one(v: &f32) -> bool {
 }
 fn is_true(v: &bool) -> bool {
     *v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Props;
+    use crate::animation::{Property, Value};
+    use crate::time::Time;
+
+    /// A value of the right kind for `p` that differs from the default.
+    fn other(p: Property) -> Value {
+        match Props::default().get(p) {
+            Value::Number(v) => Value::Number(v + 1.5),
+            Value::Bool(v) => Value::Bool(!v),
+            Value::Rgba(_) => Value::Rgba([0.25, 0.5, 0.75, 1.0]),
+            Value::Blend(_) => Value::Blend(super::BlendMode::Screen),
+            Value::Index(v) => Value::Index(v + 3),
+            Value::Time(_) => Value::Time(Time::from_secs(1)),
+        }
+    }
+
+    #[test]
+    fn get_reads_what_set_wrote_and_nothing_else_changes() {
+        for p in Property::ALL {
+            if p == Property::TimeOffset {
+                continue; // lives on the instance, not in Props
+            }
+            let mut props = Props::default();
+            props.set(p, other(p));
+            assert_eq!(props.get(p), other(p), "{p:?}");
+            for q in Property::ALL.into_iter().filter(|&q| q != p) {
+                assert_eq!(props.get(q), Props::default().get(q), "setting {p:?} changed {q:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_value_of_the_wrong_kind_changes_nothing() {
+        let mut props = Props::default();
+        props.set(Property::X, Value::Bool(true));
+        props.set(Property::Visible, Value::Number(0.0));
+        assert_eq!(props, Props::default());
+    }
 }

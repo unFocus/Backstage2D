@@ -2,13 +2,14 @@
 
 use crate::health::{AfterExit, StageHealth};
 use crate::panels;
+use crate::properties::{self, Properties, PropertiesModel, PropertiesMsg, PropertiesOutput};
 use crate::recovery::{self, Candidate, Recovery};
 use crate::smoke::{self, SmokeStep, SmokeTest};
 use crate::stage_view::StageView;
 use crate::supervisor::{StageEvent, Supervisor};
 use crate::timeline::{Playhead, Timeline, TimelineModel, TimelineMsg, TimelineOutput, pick_animation};
 use crate::working_copy::{self, CommitError, SaveToError, WorkingCopy};
-use backstage_core::{Animation, Command, EditorPrefs, Entry, Project, Time, TimeGrid};
+use backstage_core::{Animation, Command, EditorPrefs, Entry, NodeId, Project, Time, TimeGrid};
 use backstage_protocol::ToStage;
 use gtk::{gdk, gio, glib, prelude::*};
 use relm4::actions::{AccelsPlus, RelmAction, RelmActionGroup};
@@ -49,6 +50,9 @@ pub struct App {
     timeline: Controller<Timeline>,
     /// The root composition's animation and clock; the stage mirrors it.
     playhead: Playhead,
+    properties: Controller<Properties>,
+    /// The selected node of the edited composition (the root, for now).
+    selection: Option<NodeId>,
     status: String,
     banner: Option<String>,
     frames_this_second: u32,
@@ -80,6 +84,9 @@ pub enum AppMsg {
     Timeline(TimelineOutput),
     /// Enter: play or pause the timeline.
     TogglePlay,
+    Properties(PropertiesOutput),
+    /// Escape: select nothing.
+    Deselect,
     Open,
     Save,
     SaveAs,
@@ -216,7 +223,7 @@ impl SimpleComponent for App {
                                 set_label: model.banner.as_deref().unwrap_or_default(),
                             },
                         },
-                        set_end_child: Some(&panels::properties()),
+                        set_end_child: Some(&properties_widget),
                     },
                 },
                 set_end_child: Some(&timeline_widget),
@@ -241,6 +248,8 @@ impl SimpleComponent for App {
             stage_view: StageView::default(),
             timeline: Timeline::builder().launch(()).forward(sender.input_sender(), AppMsg::Timeline),
             playhead: Playhead::new(None),
+            properties: Properties::builder().launch(()).forward(sender.input_sender(), AppMsg::Properties),
+            selection: None,
             health: StageHealth::new(Instant::now()),
             smoke: SmokeTest::from_env(),
             status: "Stage starting…".into(),
@@ -250,6 +259,7 @@ impl SimpleComponent for App {
         };
         let stage_view = &model.stage_view;
         let timeline_widget = model.timeline.widget().clone();
+        let properties_widget = model.properties.widget().clone();
         let file_menu = gio::Menu::new();
         file_menu.append(Some("Open…"), Some("win.open"));
         file_menu.append(Some("Save"), Some("win.save"));
@@ -257,7 +267,7 @@ impl SimpleComponent for App {
         let widgets = view_output!();
         root.add_controller(shortcuts(&sender));
         register_file_actions(&root, &sender);
-        model.refresh_timeline();
+        model.refresh_panels();
 
         let s = sender.clone();
         model.stage_view.connect_stage_resized(move |width, height, scale| {
@@ -319,6 +329,8 @@ impl SimpleComponent for App {
             AppMsg::Nudge(dx, dy) => self.update_nudge(dx, dy),
             AppMsg::Timeline(out) => self.on_timeline(out),
             AppMsg::TogglePlay => self.toggle_play(),
+            AppMsg::Properties(out) => self.on_properties(out),
+            AppMsg::Deselect => self.select(None),
             AppMsg::Open => self.check_unsaved(Then::Open, &sender),
             AppMsg::Save => self.save(None, &sender),
             AppMsg::SaveAs => self.save_as(None, &sender),
@@ -442,32 +454,68 @@ impl App {
         self.timeline.emit(TimelineMsg::SetPlaying(self.playhead.is_playing()));
     }
 
-    /// Rebuilds the timeline from the document, after it changed or was
-    /// replaced. Falls back to another animation if the shown one is gone.
-    fn refresh_timeline(&mut self) {
+    /// Rebuilds the timeline and properties from the document, after it
+    /// changed or was replaced, or the selection or animation changed.
+    /// Falls back to another animation if the shown one is gone, and drops
+    /// a selection whose node is gone.
+    fn refresh_panels(&mut self) {
         let Some(copy) = &self.copy else {
             self.timeline.emit(TimelineMsg::SetModel(TimelineModel::default()));
+            self.properties.emit(PropertiesMsg::SetModel(PropertiesModel::Document {
+                name: String::new(),
+                settings: Default::default(),
+            }));
             return;
         };
         let project = copy.document().project();
+        let comp = project.root;
+        let exists = |id: &NodeId| project.compositions.get(&comp).is_some_and(|c| c.nodes.contains_key(id));
+        let selection = self.selection.filter(exists);
         let anim = pick_animation(project, self.playhead.animation);
-        let model = TimelineModel::build(project, anim);
+        let timeline = TimelineModel { selected: selection, ..TimelineModel::build(project, anim) };
+        let properties = PropertiesModel::build(project, &copy.display_name(), comp, selection, anim);
+        self.selection = selection;
         if anim != self.playhead.animation {
             self.playhead.pick(anim);
             self.send_transport();
         }
-        self.timeline.emit(TimelineMsg::SetModel(model));
+        self.timeline.emit(TimelineMsg::SetModel(timeline));
+        self.properties.emit(PropertiesMsg::SetModel(properties));
         self.show_playhead();
+    }
+
+    fn select(&mut self, node: Option<NodeId>) {
+        self.selection = node;
+        self.refresh_panels();
+    }
+
+    /// Turns a properties change into an entry for the stage. Nothing is
+    /// sent if it wouldn't change anything.
+    fn on_properties(&mut self, out: PropertiesOutput) {
+        let Some(copy) = &self.copy else { return };
+        let project = copy.document().project();
+        let comp = project.root;
+        let entry = match out {
+            PropertiesOutput::EditRest { node, property, value } => {
+                properties::rest_edit(project, comp, node, property, value)
+            }
+            PropertiesOutput::Rename { node, name } => properties::rename(project, comp, node, &name),
+            PropertiesOutput::EditSettings(settings) => properties::settings_edit(project, settings),
+        };
+        if let Some(entry) = entry {
+            self.submit(entry);
+        }
     }
 
     fn on_timeline(&mut self, out: TimelineOutput) {
         match out {
             TimelineOutput::Scrub(t) => self.seek(t),
+            TimelineOutput::Select(node) => self.select(node),
             TimelineOutput::TogglePlay => self.toggle_play(),
             TimelineOutput::PickAnimation(id) => {
                 self.playhead.pick(Some(id));
                 self.send_transport();
-                self.refresh_timeline();
+                self.refresh_panels();
             }
             TimelineOutput::SetSnap(on) => self.set_prefs(|p| p.time_snap = on),
             TimelineOutput::SetGrid(tps) => self.set_prefs(|p| p.time_grid = TimeGrid::new(tps)),
@@ -503,12 +551,13 @@ impl App {
         self.stage_ready = false;
         let load = copy.load_message();
         self.playhead = Playhead::new(pick_animation(copy.document().project(), None));
+        self.selection = None;
         let Some(old) = self.copy.replace(copy) else {
             // Nothing opened at startup, so no stage is running yet.
-            self.refresh_timeline();
+            self.refresh_panels();
             return self.start_stage(sender, true);
         };
-        self.refresh_timeline();
+        self.refresh_panels();
         // The next `Loaded` must answer this load. If the stage is still
         // loading the old document, it wouldn't, so start a fresh one.
         let restart = old.awaiting_load();
@@ -677,6 +726,16 @@ impl App {
                 let step = self.smoke.as_mut().and_then(SmokeTest::scrubbed);
                 self.run_smoke_step(step, sender);
             }
+            Some(SmokeStep::Select) => {
+                // The same path as clicking the first timeline row.
+                let first = self.copy.as_ref().and_then(|c| {
+                    let comp = c.document().project().root_composition()?;
+                    comp.root_node()?.children.first().copied()
+                });
+                self.on_timeline(TimelineOutput::Select(first));
+                let step = self.smoke.as_mut().and_then(|s| s.selected(self.selection.is_some()));
+                self.run_smoke_step(step, sender);
+            }
             Some(SmokeStep::Undo) => self.submit(Entry::Undo),
             // Carried out by `offer_restore`, which has the candidate.
             Some(SmokeStep::Restore) => {}
@@ -778,7 +837,7 @@ impl App {
                 match copy.committed(seq, &entry) {
                     Ok(false) => {} // for the document before an Open
                     Ok(true) => {
-                        self.refresh_timeline();
+                        self.refresh_panels();
                         let step = self.smoke.as_mut().and_then(|s| s.committed(seq));
                         self.run_smoke_step(step, sender);
                     }
@@ -830,9 +889,11 @@ pub fn nudge_entry(project: &Project, dx: f32, dy: f32) -> Option<Entry> {
     Some(Entry::Do(Command::SetRest { comp: comp.id, node, rest }))
 }
 
-/// Ctrl+Z / Ctrl+Shift+Z, Enter to play or pause, and the arrow keys for
-/// the debug nudge (10 px, or 1 px with Shift). Capture phase, so focused
-/// widgets don't swallow the arrows.
+/// Ctrl+Z / Ctrl+Shift+Z, Enter to play or pause, Escape to deselect, and
+/// the arrow keys for the debug nudge (10 px, or 1 px with Shift). Capture
+/// phase, so focused buttons don't swallow the arrows; but a text field or
+/// spin button being typed in, or an open popover (a dropdown's list),
+/// keeps its keys.
 fn shortcuts(sender: &ComponentSender<App>) -> gtk::ShortcutController {
     #[derive(Clone, Copy)]
     enum Action {
@@ -840,12 +901,14 @@ fn shortcuts(sender: &ComponentSender<App>) -> gtk::ShortcutController {
         Redo,
         Nudge(f32, f32),
         TogglePlay,
+        Deselect,
     }
     let mut bindings =
         vec![("<Control>z".to_owned(), Action::Undo), ("<Control><Shift>z".to_owned(), Action::Redo)];
     for key in ["Return", "KP_Enter"] {
         bindings.push((key.to_owned(), Action::TogglePlay));
     }
+    bindings.push(("Escape".to_owned(), Action::Deselect));
     for (key, dx, dy) in [("Left", -1.0, 0.0), ("Right", 1.0, 0.0), ("Up", 0.0, -1.0), ("Down", 0.0, 1.0)] {
         bindings.push((key.to_owned(), Action::Nudge(dx * 10.0, dy * 10.0)));
         bindings.push((format!("<Shift>{key}"), Action::Nudge(dx, dy)));
@@ -855,12 +918,16 @@ fn shortcuts(sender: &ComponentSender<App>) -> gtk::ShortcutController {
     controller.set_propagation_phase(gtk::PropagationPhase::Capture);
     for (trigger, action) in bindings {
         let s = sender.clone();
-        let callback = gtk::CallbackAction::new(move |_, _| {
+        let callback = gtk::CallbackAction::new(move |widget, _| {
+            if keys_belong_to_focus(widget) {
+                return glib::Propagation::Proceed;
+            }
             s.input(match action {
                 Action::Undo => AppMsg::Undo,
                 Action::Redo => AppMsg::Redo,
                 Action::Nudge(dx, dy) => AppMsg::Nudge(dx, dy),
                 Action::TogglePlay => AppMsg::TogglePlay,
+                Action::Deselect => AppMsg::Deselect,
             });
             glib::Propagation::Stop
         });
@@ -868,6 +935,17 @@ fn shortcuts(sender: &ComponentSender<App>) -> gtk::ShortcutController {
             .add_shortcut(gtk::Shortcut::new(gtk::ShortcutTrigger::parse_string(&trigger), Some(callback)));
     }
     controller
+}
+
+/// Whether the focused widget needs plain keys itself: something you type
+/// into, or anything in a popover.
+fn keys_belong_to_focus(window: &gtk::Widget) -> bool {
+    let Some(focus) = window.downcast_ref::<gtk::Window>().and_then(gtk::prelude::GtkWindowExt::focus) else {
+        return false;
+    };
+    focus.is::<gtk::Text>()
+        || focus.ancestor(gtk::SpinButton::static_type()).is_some()
+        || focus.ancestor(gtk::Popover::static_type()).is_some()
 }
 
 /// Open…, Save, and Save As…, with their accelerators.

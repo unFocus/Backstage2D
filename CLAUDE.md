@@ -36,7 +36,9 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
   instead of the built-in sample. File → Open (Ctrl+O) sends another one to
   the running stage with `Load`; the stage takes no project argument.
   Save is Ctrl+S, and Save As is Ctrl+Shift+S. Enter plays or pauses the
-  timeline.
+  timeline, and Escape clears the selection. Window shortcuts step aside
+  for focused text fields, spin buttons, and popovers
+  (`keys_belong_to_focus` in `app.rs`).
 - The editor owns the playhead and sends it with `ToStage::Transport`
   (protocol v3). The editor's stage starts paused at 0.
 

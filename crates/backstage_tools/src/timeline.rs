@@ -50,6 +50,8 @@ pub struct TimelineModel {
     pub rows: Vec<Row>,
     pub grid: TimeGrid,
     pub snap: bool,
+    /// The editor's selected node, highlighted.
+    pub selected: Option<NodeId>,
 }
 
 impl Default for TimelineModel {
@@ -62,6 +64,7 @@ impl Default for TimelineModel {
             rows: Vec::new(),
             grid: TimeGrid::default(),
             snap: true,
+            selected: None,
         }
     }
 }
@@ -183,6 +186,25 @@ impl Layout {
 
 /// Where a scrub at `x` puts the playhead: snapped to the grid if snapping
 /// is on, and within the animation.
+/// Where a press at `(x, y)` lands.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Hit {
+    /// The ruler or the key area: scrubs.
+    Time,
+    /// A row's name: selects that row's node.
+    Row(usize),
+    /// The name column below the rows: clears the selection.
+    Nothing,
+}
+
+pub fn hit(model: &TimelineModel, x: f64, y: f64) -> Hit {
+    if x >= NAME_W || y < RULER_H {
+        return Hit::Time;
+    }
+    let row = ((y - RULER_H) / ROW_H).floor() as usize;
+    if row < model.rows.len() { Hit::Row(row) } else { Hit::Nothing }
+}
+
 pub fn scrub_time(model: &TimelineModel, layout: &Layout, x: f64) -> Time {
     let t = layout.time_at(x);
     let t = if model.snap { model.grid.snap(t) } else { t };
@@ -292,6 +314,8 @@ struct Drawn {
 pub struct Timeline {
     drawn: Rc<RefCell<Drawn>>,
     playing: bool,
+    /// The current drag started in the ruler or key area.
+    scrubbing: bool,
     /// The grid choices in the dropdown (the project's may be extra).
     grids: Vec<u32>,
     /// The drawing area's width at its last draw, for mapping scrubs.
@@ -305,7 +329,9 @@ pub enum TimelineMsg {
     SetPlayhead(Time),
     SetPlaying(bool),
     /// Pointer at x in the drawing area, pressed or dragged.
-    DragAt(f64),
+    DragBegin(f64, f64),
+    /// The drag moved to x.
+    DragTo(f64),
     PlayClicked,
     AnimationSelected(u32),
     SnapToggled(bool),
@@ -315,6 +341,7 @@ pub enum TimelineMsg {
 #[derive(Debug)]
 pub enum TimelineOutput {
     Scrub(Time),
+    Select(Option<NodeId>),
     TogglePlay,
     PickAnimation(AnimId),
     SetSnap(bool),
@@ -349,6 +376,7 @@ impl SimpleComponent for Timeline {
             playing: false,
             grids: GRID_CHOICES.to_vec(),
             width: Rc::default(),
+            scrubbing: false,
         };
 
         let bar = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -396,11 +424,11 @@ impl SimpleComponent for Timeline {
         });
         let drag = gtk::GestureDrag::new();
         let s = sender.clone();
-        drag.connect_drag_begin(move |_, x, _| s.input(TimelineMsg::DragAt(x)));
+        drag.connect_drag_begin(move |_, x, y| s.input(TimelineMsg::DragBegin(x, y)));
         let s = sender.clone();
         drag.connect_drag_update(move |g, dx, _| {
             if let Some((x, _)) = g.start_point() {
-                s.input(TimelineMsg::DragAt(x + dx));
+                s.input(TimelineMsg::DragTo(x + dx));
             }
         });
         area.add_controller(drag);
@@ -427,10 +455,26 @@ impl SimpleComponent for Timeline {
             }
             TimelineMsg::SetPlayhead(t) => drawn.playhead = t,
             TimelineMsg::SetPlaying(playing) => self.playing = playing,
-            TimelineMsg::DragAt(x) => {
+            TimelineMsg::DragBegin(x, y) => {
+                self.scrubbing = false;
+                match hit(&drawn.model, x, y) {
+                    Hit::Time => {
+                        self.scrubbing = true;
+                        drop(drawn);
+                        SimpleComponent::update(self, TimelineMsg::DragTo(x), sender);
+                    }
+                    Hit::Row(i) => {
+                        let _ = sender.output(TimelineOutput::Select(Some(drawn.model.rows[i].node)));
+                    }
+                    Hit::Nothing => {
+                        let _ = sender.output(TimelineOutput::Select(None));
+                    }
+                }
+            }
+            TimelineMsg::DragTo(x) => {
                 let width = self.width.get();
                 let layout = Layout { width, duration: drawn.model.duration };
-                if drawn.model.animation.is_some() {
+                if self.scrubbing && drawn.model.animation.is_some() {
                     let t = scrub_time(&drawn.model, &layout, x);
                     drawn.playhead = t;
                     self.playing = false;
@@ -549,6 +593,11 @@ fn draw(cr: &gtk::cairo::Context, drawn: &Drawn, width: f64, height: f64) -> Res
     cr.fill()?;
     for (i, row) in model.rows.iter().enumerate() {
         let y = RULER_H + i as f64 * ROW_H;
+        if model.selected == Some(row.node) {
+            cr.set_source_rgba(0.25, 0.45, 0.8, 0.45);
+            cr.rectangle(0.0, y, width, ROW_H);
+            cr.fill()?;
+        }
         cr.set_source_rgb(0.28, 0.28, 0.31);
         cr.move_to(0.0, (y + ROW_H).floor() + 0.5);
         cr.line_to(width, (y + ROW_H).floor() + 0.5);
@@ -665,6 +714,18 @@ mod tests {
         assert_eq!(pick_animation(&project, None), Some(STAGE_MAIN), "first");
         project.compositions.get_mut(&STAGE).unwrap().animations.clear();
         assert_eq!(pick_animation(&project, None), None);
+    }
+
+    #[test]
+    fn presses_select_rows_clear_the_selection_or_scrub() {
+        let project = sample::bounce();
+        let model = TimelineModel::build(&project, Some(STAGE_MAIN));
+        let n = model.rows.len();
+        assert_eq!(hit(&model, 10.0, RULER_H + 1.0), Hit::Row(0));
+        assert_eq!(hit(&model, 10.0, RULER_H + ROW_H * (n as f64 - 0.5)), Hit::Row(n - 1));
+        assert_eq!(hit(&model, 10.0, RULER_H + ROW_H * n as f64 + 1.0), Hit::Nothing);
+        assert_eq!(hit(&model, 10.0, 5.0), Hit::Time, "the ruler");
+        assert_eq!(hit(&model, NAME_W + 1.0, RULER_H + 1.0), Hit::Time, "the key area");
     }
 
     #[test]
