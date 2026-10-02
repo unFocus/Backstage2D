@@ -6,12 +6,14 @@
 //! GTK. The [`Timeline`] component draws them with cairo and reports
 //! scrubbing and picks to the app.
 
+use crate::tree::{subtree, visible_rows};
 use backstage_core::eval::clock::local_time;
 use backstage_core::{AnimId, Animation, LoopMode, NodeId, Project, Repeat, Time, TimeGrid};
 use backstage_protocol::ToStage;
 use gtk::prelude::*;
 use relm4::prelude::*;
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -19,6 +21,9 @@ use std::time::Instant;
 pub const NAME_W: f64 = 160.0;
 pub const RULER_H: f64 = 22.0;
 pub const ROW_H: f64 = 22.0;
+/// Indentation per tree level, and the disclosure triangle's width.
+const INDENT: f64 = 12.0;
+const EXPANDER_W: f64 = 14.0;
 /// Space after the end of the animation.
 const PAD_R: f64 = 24.0;
 /// Grid lines closer than this are thinned out.
@@ -34,8 +39,10 @@ pub struct Row {
     /// 0 for the root node's children.
     pub depth: usize,
     /// Times with a key on any of the node's tracks, ascending, no
-    /// duplicates.
+    /// duplicates. A collapsed row has its whole subtree's keys.
     pub keys: Vec<Time>,
+    pub has_children: bool,
+    pub expanded: bool,
 }
 
 /// What the timeline shows.
@@ -70,8 +77,9 @@ impl Default for TimelineModel {
 }
 
 impl TimelineModel {
-    /// The root composition with `animation` shown.
-    pub fn build(project: &Project, animation: Option<AnimId>) -> Self {
+    /// The root composition with `animation` shown, with the same rows as
+    /// the Layers panel ([`visible_rows`]).
+    pub fn build(project: &Project, animation: Option<AnimId>, expanded: &BTreeSet<NodeId>) -> Self {
         let mut model = TimelineModel {
             grid: project.editor.time_grid,
             snap: project.editor.time_snap,
@@ -86,23 +94,29 @@ impl TimelineModel {
             model.looping = anim.looping;
         }
 
-        // Depth-first, in child order, below the root node.
-        let mut stack: Vec<(NodeId, usize)> = comp
-            .root_node()
-            .map(|root| root.children.iter().rev().map(|&c| (c, 0)).collect())
-            .unwrap_or_default();
-        while let Some((id, depth)) = stack.pop() {
-            let Some(node) = comp.nodes.get(&id) else { continue };
+        for row in visible_rows(comp, expanded) {
+            // A collapsed row stands for its whole subtree.
+            let nodes = if row.has_children && !row.expanded {
+                subtree(comp, row.node)
+            } else {
+                BTreeSet::from([row.node])
+            };
             let mut keys: Vec<Time> = anim
                 .iter()
                 .flat_map(|(_, a)| &a.tracks)
-                .filter(|t| t.node == id)
+                .filter(|t| nodes.contains(&t.node))
                 .flat_map(|t| t.keys.iter().map(|k| k.at))
                 .collect();
             keys.sort();
             keys.dedup();
-            model.rows.push(Row { node: id, name: node.name.clone(), depth, keys });
-            stack.extend(node.children.iter().rev().map(|&c| (c, depth + 1)));
+            model.rows.push(Row {
+                node: row.node,
+                name: row.name,
+                depth: row.depth,
+                keys,
+                has_children: row.has_children,
+                expanded: row.expanded,
+            });
         }
         model
     }
@@ -193,6 +207,8 @@ pub enum Hit {
     Time,
     /// A row's name: selects that row's node.
     Row(usize),
+    /// A row's disclosure triangle: expands or collapses it.
+    Expander(usize),
     /// The name column below the rows: clears the selection.
     Nothing,
 }
@@ -201,8 +217,15 @@ pub fn hit(model: &TimelineModel, x: f64, y: f64) -> Hit {
     if x >= NAME_W || y < RULER_H {
         return Hit::Time;
     }
-    let row = ((y - RULER_H) / ROW_H).floor() as usize;
-    if row < model.rows.len() { Hit::Row(row) } else { Hit::Nothing }
+    let i = ((y - RULER_H) / ROW_H).floor() as usize;
+    let Some(row) = model.rows.get(i) else { return Hit::Nothing };
+    let indent = indent_x(row.depth);
+    if row.has_children && x >= indent && x < indent + EXPANDER_W { Hit::Expander(i) } else { Hit::Row(i) }
+}
+
+/// Where a row's expander starts; its name follows the expander.
+fn indent_x(depth: usize) -> f64 {
+    4.0 + depth as f64 * INDENT
 }
 
 pub fn scrub_time(model: &TimelineModel, layout: &Layout, x: f64) -> Time {
@@ -342,6 +365,7 @@ pub enum TimelineMsg {
 pub enum TimelineOutput {
     Scrub(Time),
     Select(Option<NodeId>),
+    ToggleExpand(NodeId),
     TogglePlay,
     PickAnimation(AnimId),
     SetSnap(bool),
@@ -462,6 +486,9 @@ impl SimpleComponent for Timeline {
                         self.scrubbing = true;
                         drop(drawn);
                         SimpleComponent::update(self, TimelineMsg::DragTo(x), sender);
+                    }
+                    Hit::Expander(i) => {
+                        let _ = sender.output(TimelineOutput::ToggleExpand(drawn.model.rows[i].node));
                     }
                     Hit::Row(i) => {
                         let _ = sender.output(TimelineOutput::Select(Some(drawn.model.rows[i].node)));
@@ -602,16 +629,39 @@ fn draw(cr: &gtk::cairo::Context, drawn: &Drawn, width: f64, height: f64) -> Res
         cr.move_to(0.0, (y + ROW_H).floor() + 0.5);
         cr.line_to(width, (y + ROW_H).floor() + 0.5);
         cr.stroke()?;
+        let indent = indent_x(row.depth);
+        if row.has_children {
+            // ▸ collapsed, ▾ expanded.
+            let (cx, cy) = (indent + EXPANDER_W / 2.0, y + ROW_H / 2.0);
+            cr.set_source_rgb(0.7, 0.7, 0.75);
+            if row.expanded {
+                cr.move_to(cx - 4.0, cy - 2.0);
+                cr.line_to(cx + 4.0, cy - 2.0);
+                cr.line_to(cx, cy + 3.0);
+            } else {
+                cr.move_to(cx - 2.0, cy - 4.0);
+                cr.line_to(cx + 3.0, cy);
+                cr.line_to(cx - 2.0, cy + 4.0);
+            }
+            cr.close_path();
+            cr.fill()?;
+        }
         cr.set_source_rgb(0.85, 0.85, 0.88);
-        cr.move_to(8.0 + row.depth as f64 * 12.0, y + ROW_H - 7.0);
+        cr.move_to(indent + EXPANDER_W, y + ROW_H - 7.0);
         cr.show_text(&row.name)?;
+        // A collapsed row's keys stand for its subtree: dimmer.
+        let summary = row.has_children && !row.expanded;
 
         if let (Some(first), Some(last)) = (row.keys.first(), row.keys.last()) {
             cr.set_source_rgba(0.35, 0.55, 0.85, 0.35);
             cr.rectangle(layout.x_of(*first), y + 4.0, layout.x_of(*last) - layout.x_of(*first), ROW_H - 8.0);
             cr.fill()?;
         }
-        cr.set_source_rgb(0.9, 0.9, 0.95);
+        if summary {
+            cr.set_source_rgb(0.6, 0.6, 0.66);
+        } else {
+            cr.set_source_rgb(0.9, 0.9, 0.95);
+        }
         for &key in &row.keys {
             let (x, cy, r) = (layout.x_of(key), y + ROW_H / 2.0, 4.0);
             cr.move_to(x, cy - r);
@@ -646,6 +696,11 @@ mod tests {
     use backstage_core::sample::{self, ids::*};
     use std::time::Duration;
 
+    /// Everything expanded, as a document starts.
+    fn build(project: &Project, anim: Option<AnimId>) -> TimelineModel {
+        TimelineModel::build(project, anim, &crate::tree::expandable(project.root_composition().unwrap()))
+    }
+
     fn secs(num: i64, den: i64) -> Time {
         Time::from_ratio(num, den)
     }
@@ -653,7 +708,7 @@ mod tests {
     #[test]
     fn rows_follow_the_tree_with_the_animations_keys() {
         let project = sample::bounce();
-        let model = TimelineModel::build(&project, Some(STAGE_MAIN));
+        let model = build(&project, Some(STAGE_MAIN));
         let main = &project.compositions[&STAGE].animations[&STAGE_MAIN];
         assert_eq!(model.animations, [(STAGE_MAIN, "main".to_owned())]);
         assert_eq!(
@@ -684,13 +739,13 @@ mod tests {
     fn nested_nodes_are_indented_and_missing_animations_show_no_keys() {
         let mut project = sample::bounce();
         project.root = BALL;
-        let model = TimelineModel::build(&project, Some(BALL_SQUASH));
+        let model = build(&project, Some(BALL_SQUASH));
         assert_eq!(model.animations.len(), 2);
         assert_eq!(model.rows.iter().map(|r| (r.node, r.depth)).collect::<Vec<_>>(), [(BALL_BODY, 0)]);
         let squash = &project.compositions[&BALL].animations[&BALL_SQUASH];
         assert_eq!(model.duration, squash.duration);
 
-        let model = TimelineModel::build(&project, Some(STAGE_MAIN));
+        let model = build(&project, Some(STAGE_MAIN));
         assert_eq!(model.animation, None, "not an animation of this composition");
         assert!(model.rows.iter().all(|r| r.keys.is_empty()));
 
@@ -699,7 +754,7 @@ mod tests {
         let ground = stage.nodes.get_mut(&GROUND).unwrap();
         ground.children = vec![EYES];
         stage.nodes.get_mut(&STAGE_ROOT).unwrap().children.retain(|&n| n != EYES);
-        let model = TimelineModel::build(&project, Some(STAGE_MAIN));
+        let model = build(&project, Some(STAGE_MAIN));
         let depths: Vec<_> = model.rows.iter().map(|r| (r.node, r.depth)).collect();
         assert_eq!(&depths[..2], [(GROUND, 0), (EYES, 1)]);
     }
@@ -717,15 +772,51 @@ mod tests {
     }
 
     #[test]
+    fn collapsed_rows_summarize_their_subtree_and_the_timeline_mirrors_the_tree() {
+        use crate::tree::tests::{GROUP, grouped};
+        let project = grouped();
+        let comp = &project.compositions[&STAGE];
+        let open = TimelineModel::build(&project, Some(STAGE_MAIN), &BTreeSet::from([GROUP]));
+        let rows = visible_rows(comp, &BTreeSet::from([GROUP]));
+        assert_eq!(
+            open.rows.iter().map(|r| (r.node, r.depth)).collect::<Vec<_>>(),
+            rows.iter().map(|r| (r.node, r.depth)).collect::<Vec<_>>()
+        );
+        assert!(open.rows[0].keys.is_empty(), "the group itself has no keys");
+
+        // Key the ground, then collapse its group: the group's row shows it.
+        let mut project = project;
+        let anim = project.compositions.get_mut(&STAGE).unwrap().animations.get_mut(&STAGE_MAIN).unwrap();
+        anim.tracks.push(backstage_core::Track {
+            node: GROUND,
+            property: backstage_core::Property::Y,
+            keys: vec![backstage_core::Key::new(
+                secs(1, 2),
+                backstage_core::Value::Number(1.0),
+                Default::default(),
+            )],
+        });
+        let closed = TimelineModel::build(&project, Some(STAGE_MAIN), &BTreeSet::new());
+        assert_eq!(closed.rows.len(), 3);
+        assert_eq!((closed.rows[0].node, closed.rows[0].expanded), (GROUP, false));
+        assert_eq!(closed.rows[0].keys, [secs(1, 2)]);
+    }
+
+    #[test]
     fn presses_select_rows_clear_the_selection_or_scrub() {
         let project = sample::bounce();
-        let model = TimelineModel::build(&project, Some(STAGE_MAIN));
+        let model = build(&project, Some(STAGE_MAIN));
         let n = model.rows.len();
         assert_eq!(hit(&model, 10.0, RULER_H + 1.0), Hit::Row(0));
         assert_eq!(hit(&model, 10.0, RULER_H + ROW_H * (n as f64 - 0.5)), Hit::Row(n - 1));
         assert_eq!(hit(&model, 10.0, RULER_H + ROW_H * n as f64 + 1.0), Hit::Nothing);
         assert_eq!(hit(&model, 10.0, 5.0), Hit::Time, "the ruler");
         assert_eq!(hit(&model, NAME_W + 1.0, RULER_H + 1.0), Hit::Time, "the key area");
+
+        let grouped = build(&crate::tree::tests::grouped(), Some(STAGE_MAIN));
+        assert_eq!(hit(&grouped, indent_x(0) + 2.0, RULER_H + 1.0), Hit::Expander(0));
+        assert_eq!(hit(&grouped, indent_x(0) + EXPANDER_W + 2.0, RULER_H + 1.0), Hit::Row(0));
+        assert_eq!(hit(&grouped, indent_x(1) + 2.0, RULER_H + ROW_H + 1.0), Hit::Row(1), "no children");
     }
 
     #[test]
@@ -742,7 +833,7 @@ mod tests {
     #[test]
     fn scrubbing_snaps_to_the_grid_and_stays_in_the_animation() {
         let project = sample::bounce();
-        let mut model = TimelineModel::build(&project, Some(STAGE_MAIN));
+        let mut model = build(&project, Some(STAGE_MAIN));
         let layout = Layout { width: NAME_W + 400.0 + PAD_R, duration: Time::from_secs(4) }; // 100 px/s
         model.grid = TimeGrid::new(60);
         assert_eq!(scrub_time(&model, &layout, NAME_W + 50.4), secs(30, 60));

@@ -6,6 +6,7 @@
 
 pub mod app;
 pub mod health;
+pub mod layers;
 pub mod panels;
 pub mod properties;
 pub mod recovery;
@@ -13,4 +14,5 @@ pub mod smoke;
 pub mod stage_view;
 pub mod supervisor;
 pub mod timeline;
+pub mod tree;
 pub mod working_copy;

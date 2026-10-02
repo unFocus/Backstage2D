@@ -36,7 +36,8 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
   instead of the built-in sample. File → Open (Ctrl+O) sends another one to
   the running stage with `Load`; the stage takes no project argument.
   Save is Ctrl+S, and Save As is Ctrl+Shift+S. Enter plays or pauses the
-  timeline, and Escape clears the selection. Window shortcuts step aside
+  timeline, Escape clears the selection, and F2 (or a double-click) renames
+  the selected layer. Window shortcuts step aside
   for focused text fields, spin buttons, and popovers
   (`keys_belong_to_focus` in `app.rs`).
 - The editor owns the playhead and sends it with `ToStage::Transport`
@@ -109,7 +110,9 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
 - Linux truncates process names to 15 characters:
   `pgrep -x backstage_player` never matches. Use `pkill -f <full path>`.
   But a `-f` pattern also matches the shell running it when its own command
-  line contains the pattern; kill by PID (`ps -eo pid,args | grep "[t]arget/debug/…"`).
+  line contains the pattern. Kill by PID, matching the end of the line
+  (`ps -eo pid,args | awk '/[b]ackstage_tools$/ {print $1}'`), and keep the
+  plain binary path out of that same command (no relaunch in it).
 - wgpu's `vertex_attr_array!` packs attributes back to back, so padding in
   instance structs must come last. `item_attributes_match_the_struct_layout`
   guards this.

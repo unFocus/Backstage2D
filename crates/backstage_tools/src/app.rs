@@ -1,6 +1,7 @@
 //! The editor window: panels around a live stage section.
 
 use crate::health::{AfterExit, StageHealth};
+use crate::layers::{Layers, LayersModel, LayersMsg, LayersOutput};
 use crate::panels;
 use crate::properties::{self, Properties, PropertiesModel, PropertiesMsg, PropertiesOutput};
 use crate::recovery::{self, Candidate, Recovery};
@@ -8,6 +9,7 @@ use crate::smoke::{self, SmokeStep, SmokeTest};
 use crate::stage_view::StageView;
 use crate::supervisor::{StageEvent, Supervisor};
 use crate::timeline::{Playhead, Timeline, TimelineModel, TimelineMsg, TimelineOutput, pick_animation};
+use crate::tree;
 use crate::working_copy::{self, CommitError, SaveToError, WorkingCopy};
 use backstage_core::{Animation, Command, EditorPrefs, Entry, NodeId, Project, Time, TimeGrid};
 use backstage_protocol::ToStage;
@@ -15,6 +17,7 @@ use gtk::{gdk, gio, glib, prelude::*};
 use relm4::actions::{AccelsPlus, RelmAction, RelmActionGroup};
 use relm4::prelude::*;
 use std::cell::Cell;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -53,6 +56,10 @@ pub struct App {
     properties: Controller<Properties>,
     /// The selected node of the edited composition (the root, for now).
     selection: Option<NodeId>,
+    layers: Controller<Layers>,
+    /// Expanded tree nodes: editor session state, shared by Layers and the
+    /// timeline.
+    expanded: BTreeSet<NodeId>,
     status: String,
     banner: Option<String>,
     frames_this_second: u32,
@@ -85,6 +92,7 @@ pub enum AppMsg {
     /// Enter: play or pause the timeline.
     TogglePlay,
     Properties(PropertiesOutput),
+    Layers(LayersOutput),
     /// Escape: select nothing.
     Deselect,
     Open,
@@ -183,7 +191,13 @@ impl SimpleComponent for App {
                     set_orientation: gtk::Orientation::Horizontal,
                     set_position: 240,
                     set_shrink_start_child: false,
-                    set_start_child: Some(&panels::library()),
+                    #[wrap(Some)]
+                    set_start_child = &gtk::Paned {
+                        set_orientation: gtk::Orientation::Vertical,
+                        set_position: 260,
+                        set_start_child: Some(&panels::library()),
+                        set_end_child: Some(&layers_widget),
+                    },
 
                     #[wrap(Some)]
                     set_end_child = &gtk::Paned {
@@ -250,6 +264,8 @@ impl SimpleComponent for App {
             playhead: Playhead::new(None),
             properties: Properties::builder().launch(()).forward(sender.input_sender(), AppMsg::Properties),
             selection: None,
+            layers: Layers::builder().launch(()).forward(sender.input_sender(), AppMsg::Layers),
+            expanded: BTreeSet::new(),
             health: StageHealth::new(Instant::now()),
             smoke: SmokeTest::from_env(),
             status: "Stage starting…".into(),
@@ -260,6 +276,7 @@ impl SimpleComponent for App {
         let stage_view = &model.stage_view;
         let timeline_widget = model.timeline.widget().clone();
         let properties_widget = model.properties.widget().clone();
+        let layers_widget = model.layers.widget().clone();
         let file_menu = gio::Menu::new();
         file_menu.append(Some("Open…"), Some("win.open"));
         file_menu.append(Some("Save"), Some("win.save"));
@@ -267,6 +284,7 @@ impl SimpleComponent for App {
         let widgets = view_output!();
         root.add_controller(shortcuts(&sender));
         register_file_actions(&root, &sender);
+        model.expand_all();
         model.refresh_panels();
 
         let s = sender.clone();
@@ -330,6 +348,7 @@ impl SimpleComponent for App {
             AppMsg::Timeline(out) => self.on_timeline(out),
             AppMsg::TogglePlay => self.toggle_play(),
             AppMsg::Properties(out) => self.on_properties(out),
+            AppMsg::Layers(out) => self.on_layers(out),
             AppMsg::Deselect => self.select(None),
             AppMsg::Open => self.check_unsaved(Then::Open, &sender),
             AppMsg::Save => self.save(None, &sender),
@@ -461,6 +480,7 @@ impl App {
     fn refresh_panels(&mut self) {
         let Some(copy) = &self.copy else {
             self.timeline.emit(TimelineMsg::SetModel(TimelineModel::default()));
+            self.layers.emit(LayersMsg::SetModel(LayersModel::default()));
             self.properties.emit(PropertiesMsg::SetModel(PropertiesModel::Document {
                 name: String::new(),
                 settings: Default::default(),
@@ -471,8 +491,16 @@ impl App {
         let comp = project.root;
         let exists = |id: &NodeId| project.compositions.get(&comp).is_some_and(|c| c.nodes.contains_key(id));
         let selection = self.selection.filter(exists);
+        self.expanded.retain(exists);
         let anim = pick_animation(project, self.playhead.animation);
-        let timeline = TimelineModel { selected: selection, ..TimelineModel::build(project, anim) };
+        let timeline =
+            TimelineModel { selected: selection, ..TimelineModel::build(project, anim, &self.expanded) };
+        let rows = project
+            .compositions
+            .get(&comp)
+            .map(|c| tree::visible_rows(c, &self.expanded))
+            .unwrap_or_default();
+        let layers = LayersModel { rows, selected: selection };
         let properties = PropertiesModel::build(project, &copy.display_name(), comp, selection, anim);
         self.selection = selection;
         if anim != self.playhead.animation {
@@ -481,7 +509,34 @@ impl App {
         }
         self.timeline.emit(TimelineMsg::SetModel(timeline));
         self.properties.emit(PropertiesMsg::SetModel(properties));
+        self.layers.emit(LayersMsg::SetModel(layers));
         self.show_playhead();
+    }
+
+    /// Every group starts expanded when a document opens.
+    fn expand_all(&mut self) {
+        self.expanded = self
+            .copy
+            .as_ref()
+            .and_then(|c| c.document().project().root_composition().map(tree::expandable))
+            .unwrap_or_default();
+    }
+
+    fn toggle_expand(&mut self, node: NodeId) {
+        if !self.expanded.remove(&node) {
+            self.expanded.insert(node);
+        }
+        self.refresh_panels();
+    }
+
+    fn on_layers(&mut self, out: LayersOutput) {
+        match out {
+            LayersOutput::Select(node) => self.select(node),
+            LayersOutput::ToggleExpand(node) => self.toggle_expand(node),
+            LayersOutput::Rename { node, name } => {
+                self.on_properties(PropertiesOutput::Rename { node, name })
+            }
+        }
     }
 
     fn select(&mut self, node: Option<NodeId>) {
@@ -511,6 +566,7 @@ impl App {
         match out {
             TimelineOutput::Scrub(t) => self.seek(t),
             TimelineOutput::Select(node) => self.select(node),
+            TimelineOutput::ToggleExpand(node) => self.toggle_expand(node),
             TimelineOutput::TogglePlay => self.toggle_play(),
             TimelineOutput::PickAnimation(id) => {
                 self.playhead.pick(Some(id));
@@ -553,10 +609,12 @@ impl App {
         self.playhead = Playhead::new(pick_animation(copy.document().project(), None));
         self.selection = None;
         let Some(old) = self.copy.replace(copy) else {
+            self.expand_all();
             // Nothing opened at startup, so no stage is running yet.
             self.refresh_panels();
             return self.start_stage(sender, true);
         };
+        self.expand_all();
         self.refresh_panels();
         // The next `Loaded` must answer this load. If the stage is still
         // loading the old document, it wouldn't, so start a fresh one.
@@ -727,12 +785,12 @@ impl App {
                 self.run_smoke_step(step, sender);
             }
             Some(SmokeStep::Select) => {
-                // The same path as clicking the first timeline row.
+                // The same path as clicking the first row in Layers.
                 let first = self.copy.as_ref().and_then(|c| {
                     let comp = c.document().project().root_composition()?;
                     comp.root_node()?.children.first().copied()
                 });
-                self.on_timeline(TimelineOutput::Select(first));
+                self.on_layers(LayersOutput::Select(first));
                 let step = self.smoke.as_mut().and_then(|s| s.selected(self.selection.is_some()));
                 self.run_smoke_step(step, sender);
             }

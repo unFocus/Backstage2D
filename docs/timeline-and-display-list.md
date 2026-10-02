@@ -98,6 +98,12 @@ Implemented in `backstage_core::eval`.
   synced expand state and selection, and shows one animation's keys. (This
   is Rive's and Spine's arrangement. In Flash a layer's content changed per
   keyframe, so layers and time had to share one interface.)
+- **Layers** lists the edited composition's tree. Groups expand and
+  collapse (session state, not saved; everything starts expanded), and
+  double-clicking a name or pressing F2 renames it. The timeline shows the
+  same rows (`tree::visible_rows`) with the same expand state; a collapsed
+  row's keys are its whole subtree's, drawn dimmer. An instance has no
+  expander: its content is another composition.
 - **Selection** is one node of the composition being edited. It is set from
   the timeline (and the layers panel; on stage in M4), and cleared with
   Escape or a click below the rows.
