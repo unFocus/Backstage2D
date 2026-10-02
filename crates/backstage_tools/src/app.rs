@@ -2,7 +2,7 @@
 
 use crate::health::{AfterExit, StageHealth};
 use crate::layers::{self, Layers, LayersModel, LayersMsg, LayersOutput};
-use crate::panels;
+use crate::library::{Library, LibraryModel, LibraryMsg, LibraryOutput};
 use crate::path;
 use crate::properties::{self, Properties, PropertiesModel, PropertiesMsg, PropertiesOutput};
 use crate::recovery::{self, Candidate, Recovery};
@@ -60,6 +60,7 @@ pub struct App {
     /// The selected node of the edited composition (the root, for now).
     selection: Option<NodeId>,
     layers: Controller<Layers>,
+    library: Controller<Library>,
     /// Expanded tree nodes: editor session state, shared by Layers and the
     /// timeline.
     expanded: BTreeSet<NodeId>,
@@ -102,6 +103,7 @@ pub enum AppMsg {
     TogglePlay,
     Properties(PropertiesOutput),
     Layers(LayersOutput),
+    Library(LibraryOutput),
     /// Escape: select nothing.
     Deselect,
     /// Edit this composition, entered from the current one.
@@ -208,7 +210,7 @@ impl SimpleComponent for App {
                     set_start_child = &gtk::Paned {
                         set_orientation: gtk::Orientation::Vertical,
                         set_position: 260,
-                        set_start_child: Some(&panels::library()),
+                        set_start_child: Some(&library_widget),
                         set_end_child: Some(&layers_widget),
                     },
 
@@ -279,6 +281,7 @@ impl SimpleComponent for App {
             properties: Properties::builder().launch(()).forward(sender.input_sender(), AppMsg::Properties),
             selection: None,
             layers: Layers::builder().launch(()).forward(sender.input_sender(), AppMsg::Layers),
+            library: Library::builder().launch(()).forward(sender.input_sender(), AppMsg::Library),
             expanded: BTreeSet::new(),
             path: Vec::new(),
             crumbs: gtk::Box::new(gtk::Orientation::Horizontal, 2),
@@ -294,6 +297,7 @@ impl SimpleComponent for App {
         let timeline_widget = model.timeline.widget().clone();
         let properties_widget = model.properties.widget().clone();
         let layers_widget = model.layers.widget().clone();
+        let library_widget = model.library.widget().clone();
         let crumbs_widget = &model.crumbs;
         crumbs_widget.add_css_class("backstage-crumbs");
         crumbs_widget.set_halign(gtk::Align::Start);
@@ -373,6 +377,7 @@ impl SimpleComponent for App {
             AppMsg::TogglePlay => self.toggle_play(),
             AppMsg::Properties(out) => self.on_properties(out),
             AppMsg::Layers(out) => self.on_layers(out),
+            AppMsg::Library(out) => self.on_library(out),
             AppMsg::Deselect => self.select(None),
             AppMsg::Enter(comp) => {
                 let path = path::enter(&self.path, comp);
@@ -565,6 +570,7 @@ impl App {
         let Some(copy) = &self.copy else {
             self.timeline.emit(TimelineMsg::SetModel(TimelineModel::default()));
             self.layers.emit(LayersMsg::SetModel(LayersModel::default()));
+            self.library.emit(LibraryMsg::SetModel(LibraryModel::default()));
             self.properties.emit(PropertiesMsg::SetModel(PropertiesModel::Document {
                 name: String::new(),
                 settings: Default::default(),
@@ -601,6 +607,7 @@ impl App {
         self.timeline.emit(TimelineMsg::SetModel(timeline));
         self.properties.emit(PropertiesMsg::SetModel(properties));
         self.layers.emit(LayersMsg::SetModel(layers));
+        self.library.emit(LibraryMsg::SetModel(LibraryModel::build(project, comp)));
         self.show_playhead();
         self.show_crumbs();
     }
@@ -643,6 +650,14 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Editing a composition from the Library: straight from the root.
+    fn on_library(&mut self, out: LibraryOutput) {
+        let LibraryOutput::Edit(comp) = out;
+        let Some(copy) = &self.copy else { return };
+        let root = copy.document().project().root;
+        self.edit_path(path::enter(&[root], comp));
     }
 
     fn select(&mut self, node: Option<NodeId>) {
@@ -904,7 +919,7 @@ impl App {
             }
             Some(SmokeStep::Enter) => {
                 // Into the first instance's composition, as a double-click in
-                // Layers does, and back out with the root crumb.
+                // the Library does, and back out with the root crumb.
                 let target = self.copy.as_ref().and_then(|c| {
                     let comp = c.document().project().root_composition()?;
                     comp.root_node()?.children.iter().find_map(|n| match &comp.nodes.get(n)?.kind {
@@ -913,7 +928,7 @@ impl App {
                     })
                 });
                 let entered = target.is_some_and(|comp| {
-                    self.on_layers(LayersOutput::Enter(comp));
+                    self.on_library(LibraryOutput::Edit(comp));
                     self.edited() == Some(comp) && self.path.len() == 2
                 });
                 self.edit_path(path::go_to(&self.path, 0));

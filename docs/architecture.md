@@ -29,8 +29,8 @@ how edits flow between them.
 - Edit commands with undo/redo: the stage commits them, the editor keeps a
   copy and autosaves the log, and a restarted stage replays it (M2).
 
-**Still to come:** editor panels on the real document, and Open/Save (M3);
-the on-stage edit hooks (M4).
+**Still to come:** the on-stage edit hooks (M4). The editor panels, Open/Save,
+and crash recovery are done (M3).
 
 Rules:
 1. `backstage_core` has **no** GPU, windowing, or GUI dependencies. It can be

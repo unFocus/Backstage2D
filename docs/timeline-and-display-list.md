@@ -111,6 +111,10 @@ Implemented in `backstage_core::eval`.
   drawn as thin outlines in the node's colour (the swatch on its row), and
   locked ones can't be edited in Properties (or, in M4, picked on stage).
   Hidden and locked rows are dimmed in Layers and the timeline.
+- **Library** lists the compositions (the root marked "Stage", the others
+  with their number of animations) and then the assets, each sorted by
+  name, and highlights the composition being edited. Double-clicking a
+  composition edits it, straight from the root.
 - **Entering a composition** (Flash's "edit symbol"): double-clicking an
   instance in Layers edits the composition it shows (F2 still renames it).
   A breadcrumb over the stage's top-left corner ("Stage › Ball") goes back

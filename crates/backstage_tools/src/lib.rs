@@ -7,7 +7,7 @@
 pub mod app;
 pub mod health;
 pub mod layers;
-pub mod panels;
+pub mod library;
 pub mod path;
 pub mod properties;
 pub mod recovery;

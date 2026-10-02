@@ -49,12 +49,12 @@ The design is recorded in [ADR 0004](adr/0004-commands-and-document-authority.md
 - [x] ADR 0004: the command and document design
 - [x] Bump `PROTOCOL_VERSION` (now 2)
 
-### M3: editor panels on real data *(in progress)*
-- [x] Timeline widget: one animation at a time, a row per node, and an animation picker. Scrubbing moves the stage's playhead. Time grid snapping. For now it covers the root composition, fits the animation to the panel width, and shows key marks per node without editing them. Protocol v3 adds `Transport`.
+### M3: editor panels on real data *(done)*
+- [x] Timeline widget: one animation at a time, a row per node, and an animation picker. Scrubbing moves the stage's playhead. Time grid snapping. It shows the edited composition, fits the animation to the panel width, and shows key marks per node without editing them. Protocol v3 adds `Transport`.
 - Library, properties, and layers panels, in three steps:
   - [x] Selection and the Properties panel: the selected node's rest values (or the document settings when nothing is selected), edited through commands. Clicking a timeline row selects.
   - [x] Layers panel (outliner) owning the tree, rename, and hide/lock/outline (saved as editor-only flags, see the ADR 0003 addendum). The timeline mirrors its expand state and selection.
-  - [ ] Library panel, and entering a composition: the stage, timeline, and layers switch to it, with a breadcrumb back
+  - [x] Library panel, and entering a composition (double-click it in the Library, or an instance in Layers): the stage, timeline, layers, and properties switch to it, with a breadcrumb back. Compositions are edited in isolation, origin at the stage centre. Protocol v4.
 - [x] Open, Save, and Save As (project folders), with a prompt for unsaved changes. Saving marks the recovery log as saved rather than clearing it, so undo still works after a save.
 - [x] Offer to restore unsaved edits from a recovery directory after an editor crash. Undo history comes back too. Orphans with nothing unsaved are cleaned up.
 
