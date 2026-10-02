@@ -1,4 +1,4 @@
-//! The timeline panel: one animation of the root composition at a time, a
+//! The timeline panel: one animation of the edited composition at a time, a
 //! row per node with its keys, and a playhead the editor owns and sends to
 //! the stage (`ToStage::Transport`).
 //!
@@ -50,7 +50,7 @@ pub struct Row {
 /// What the timeline shows.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimelineModel {
-    /// The root composition's animations, for the picker.
+    /// The edited composition's animations, for the picker.
     pub animations: Vec<(AnimId, String)>,
     /// The one shown, if the composition has any.
     pub animation: Option<AnimId>,

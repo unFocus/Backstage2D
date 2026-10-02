@@ -1,6 +1,7 @@
 # ADR 0003: Document model, scene model, and time
 
-**Status:** Accepted (2026-09-28)
+**Status:** Accepted (2026-09-28). Addendum on editor-only node flags
+(2026-10-02) at the end.
 
 ## Context
 M1 needs a document model in `backstage_core`. Requirements from the user:

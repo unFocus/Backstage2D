@@ -9,8 +9,8 @@ spans, and no mutable display list.
   stage is the root composition.
 - Nodes are groups, shapes, flipbooks, bitmaps, nested composition
   instances, and masks. Sibling order is z-order.
-- **Top-level groups are shown as layers** in the editor (lock, hide,
-  outline), as in Flash.
+- The editor shows every composition's tree in its **Layers** outliner, with
+  editor-only hide, lock, and outline on any node (see Editor panels).
 
 ## Animations
 - An animation keys node properties over **time** (flicks). A 2 s tween is
@@ -126,9 +126,9 @@ Implemented in `backstage_core::eval`.
   composition with the playhead (`ToStage::Transport`, protocol v4), so a
   restarted stage comes back in it. Editing in place, with the parent shown
   around it, can come later.
-- **Selection** is one node of the composition being edited. It is set from
-  the timeline (and the layers panel; on stage in M4), and cleared with
-  Escape or a click below the rows.
+- **Selection** is one node of the composition being edited. It is set
+  from Layers or the timeline (and on stage in M4), and cleared with Escape
+  or a click below the timeline's rows. It lives in the editor process.
 - **Properties** shows the selected node's *rest* values, or the document
   settings when nothing is selected. Every change is a command (`SetRest`,
   `RenameNode`, `SetSettings`), so it's undoable. A property the shown
@@ -143,15 +143,16 @@ Implemented in `backstage_core::eval`.
   second (default 60; 30 for classic games). The timeline's Snap toggle and
   grid menu change `EditorPrefs`, which is an undoable edit saved with the
   project.
-- **The editor's playhead:** the editor owns a transport (the animation
-  the root composition plays, its clock, and whether it's playing) and
+- **The editor's playhead:** the editor owns a transport (the edited
+  composition, the animation it plays, its clock, and whether it's playing) and
   sends it to the stage (`ToStage::Transport`), again whenever a stage
   connects. So a restarted stage comes back at the same moment. The stage
   starts paused at 0, as in Flash. Enter plays and pauses, and scrubbing
   pauses. Seeking just evaluates another moment (`evaluate` is pure), so
   free-running nested instances move with it. Without a `Transport`, the
   stage (and the player) plays the default animation from zero.
-- **Spatial grid:** objects snap to a pixel grid on the stage.
+- **Spatial grid:** objects snap to a pixel grid on the stage (M4; the
+  setting already exists in `EditorPrefs`).
 - **Pixel-art mode** (project setting): whole-pixel positions and
   nearest-neighbor bitmaps.
 

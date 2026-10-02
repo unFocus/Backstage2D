@@ -5,7 +5,13 @@
   (M0.5). The stage rendering the real project (M1). Document authority,
   the editor's copy, and command replay after a restart (M2, see
   [ADR 0004](0004-commands-and-document-authority.md)).
-- **Still to build:** the query hooks and the on-stage edit hooks (M3/M4).
+- **M3:** the tools panels work entirely on the editor's document copy,
+  as the Consequences below predicted, so no query hooks were needed. The
+  playhead and the edited composition go to the stage with
+  `ToStage::Transport`. The selection is kept in the tools process for
+  now; how the stage learns it for on-stage handles is for M4.
+- **Still to build:** the on-stage edit hooks (M4), and query hooks if
+  they turn out to be needed.
 
 ## Terms
 - **Stage (engine):** the `backstage_stage` process. It renders the display

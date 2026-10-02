@@ -7,8 +7,9 @@
 ┌──────────────────────┐    protocol     ┌──────────────────────────────┐
 │ backstage_tools      │ ──Load───────>  │ backstage_stage              │
 │  GTK 4 + Relm4       │   (base + log)  │  document (single writer)    │
-│  timeline, library,  │ ──Submit─────>  │  evaluate + renderer         │
-│  properties panels   │ <──Loaded─────  │  on-stage edit hooks (M4):   │
+│  timeline, layers,   │ ──Submit─────>  │  evaluate + renderer         │
+│  library, properties │ ──Transport──>  │  editor view (hide/outline)  │
+│  selection, playhead │ <──Loaded─────  │  on-stage edit hooks (M4):   │
 │  document copy +     │ <──Committed──  │   selection, bounds, bezier, │
 │  recovery log        │ <──frames─────  │   transform, snapping        │
 └─────────┬────────────┘    (opt. B/C)   └─────────────┬────────────────┘
@@ -28,9 +29,19 @@ how edits flow between them.
 - The standalone player.
 - Edit commands with undo/redo: the stage commits them, the editor keeps a
   copy and autosaves the log, and a restarted stage replays it (M2).
+- The editor's panels on the real document (M3): a timeline with a
+  playhead the editor owns and sends to the stage (`Transport`), Layers
+  (the node tree, with editor-only hide/lock/outline), Properties, and a
+  Library from which any composition can be entered. Open/Save, and
+  restoring unsaved work after an editor crash.
 
-**Still to come:** the on-stage edit hooks (M4). The editor panels, Open/Save,
-and crash recovery are done (M3).
+**Still to come:** the on-stage edit hooks (M4).
+
+**Where editor state lives today:** the selection, the playhead, the
+expanded tree nodes, and the breadcrumb of entered compositions are kept in
+the tools process. The playhead and the edited composition are sent to the
+stage with `Transport`. ADR 0002 has the stage owning selection for on-stage
+editing; how selection reaches the stage is for M4 to settle.
 
 Rules:
 1. `backstage_core` has **no** GPU, windowing, or GUI dependencies. It can be
@@ -62,6 +73,9 @@ Defined in [ADR 0003](adr/0003-document-model.md):
   on-stage tools all consume it.
 - The runtime state (mixers, free-running clocks, script overrides) is small,
   data-oriented, and serializable.
+- Nodes carry **editor-only flags** (hide, lock, outline) that playback
+  never sees. The editor's stage applies them to the evaluated scene
+  (`backstage_stage::view`); the player doesn't.
 - Edits are **commands** (`backstage_core::Command`) whose `apply` returns
   the inverse. A **`Document`** wraps the project with its undo/redo history
   and a sequence number, and changes only through log entries (`Do`,

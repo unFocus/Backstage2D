@@ -1,7 +1,7 @@
-//! The root composition's clock: which animation it plays, where its
-//! playhead is, and whether it's moving. Set by the editor with
-//! `ToStage::Transport`; until then the stage plays its default animation
-//! from zero.
+//! The editor's transport: which composition the stage shows, which
+//! animation it plays, where its playhead is, and whether it's moving. Set
+//! by the editor with `ToStage::Transport`; until then the stage plays the
+//! root's default animation from zero.
 
 use backstage_core::{AnimId, CompId, RuntimeState, Time};
 use std::time::Instant;

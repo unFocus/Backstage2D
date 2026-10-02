@@ -54,7 +54,7 @@ pub struct App {
     health: StageHealth,
     smoke: Option<SmokeTest>,
     timeline: Controller<Timeline>,
-    /// The root composition's animation and clock; the stage mirrors it.
+    /// The edited composition's animation and clock; the stage mirrors it.
     playhead: Playhead,
     properties: Controller<Properties>,
     /// The selected node of the edited composition (the root, for now).

@@ -10,9 +10,10 @@ Flash Pro model (stage, timeline, reusable animated symbols) and modernizes it:
 - A crash-isolated stage process.
 - Vector rendering with lyon on wgpu.
 
-Status: pre-alpha. M1 is done: projects play live in the editor's stage and in
-the standalone player. M2 (edit commands, undo, crash recovery that keeps your
-work) is next. See the [roadmap](docs/roadmap.md), and start with
+Status: pre-alpha. M0–M3 are done: projects play live in the editor's stage
+and in the standalone player; every edit is an undoable command that survives
+stage and editor crashes; and the editor has a real timeline, Layers,
+Properties, and Library, with Open/Save. M4 (on-stage editing) is next. See the [roadmap](docs/roadmap.md), and start with
 [`docs/`](docs/README.md). The original 2012 AS3 Backstage2D is preserved on
 the [`archive`](https://github.com/unFocus/Backstage2D/tree/archive) branch.
 
@@ -44,6 +45,12 @@ cargo run -p backstage_player -- samples/bounce.bs2d   # play a project in a win
 cargo run -p backstage_core --example scene_dump -- samples/bounce.bs2d 0.5s   # print a scene
 scripts/check.sh                 # everything CI checks (see docs/testing.md)
 ```
+
+Editor keys: **Ctrl+O** / **Ctrl+S** / **Ctrl+Shift+S** open, save, and save
+as; **Ctrl+Z** / **Ctrl+Shift+Z** undo and redo; **Enter** plays or pauses the
+timeline; **Escape** clears the selection; **F2** renames the selected layer.
+Double-click a composition in the Library (or an instance in Layers) to edit
+it.
 
 Player keys: **Space** pauses, **F** / **F11** toggles fullscreen, **Esc** or
 **Ctrl+Q** quits. `--max-fps N` caps the frame rate (it otherwise follows the

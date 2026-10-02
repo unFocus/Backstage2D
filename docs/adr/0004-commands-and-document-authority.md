@@ -1,7 +1,7 @@
 # ADR 0004: Edit commands, the document log, and document authority
 
 **Status:** Accepted (2026-09-30). Implemented in M2; §5 extended for
-Save and Open in M3 (2026-09-30).
+Save, Open, and restoring after an editor crash in M3 (2026-09-30).
 
 ## Context
 [ADR 0002](0002-stage-process-isolation.md) requires:
@@ -97,7 +97,8 @@ inside them is RON text:
 
 A protocol test pins the postcard limitation down. The message size limit
 is 64 MiB, and the sender refuses to send anything larger.
-`PROTOCOL_VERSION` is 2.
+`PROTOCOL_VERSION` was 2 for this design. M3 added `Transport` (the
+editor's playhead, v3) and the edited composition in it (v4).
 
 ### 5. Autosave
 The editor writes a recovery directory for each run:

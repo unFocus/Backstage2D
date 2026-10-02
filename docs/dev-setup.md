@@ -52,31 +52,46 @@ The editor starts `backstage_stage` from the same `target/` directory. The
 stage logs the GPU it picked, for example
 `backstage_stage: using AMD Radeon RX 6800 (RADV NAVI21) (Vulkan)`.
 
-By default the editor opens the built-in bounce sample. To open a
-different project directory:
+By default the editor opens the built-in bounce sample. File → Open
+(Ctrl+O) opens a project folder; to open one at startup instead:
 ```sh
 BACKSTAGE_PROJECT=samples/bounce.bs2d cargo run -p backstage_tools
 ```
-This is a stopgap until File → Open (M3). The editor loads the project and
-sends it to the stage every time the stage (re)starts. A project that fails
-to load is shown in a banner, and no stage is started.
+The editor sends the project to the stage every time the stage (re)starts.
+A project that fails to load is shown in a banner, and no stage is started
+until one opens.
 
 Runtime files (the socket and frame rings) live in
 `$XDG_RUNTIME_DIR/backstage2d/`. Files left by processes that died are
 cleaned up the next time the editor starts.
 
-Undo and Redo are Ctrl+Z and Ctrl+Shift+Z (or the header buttons). Until
-on-stage editing arrives (M4), the arrow keys are a debug edit: they move
-the root composition's first node (the ground in the sample) by 10 px, or
-1 px with Shift. The title shows • once there are edits.
+## Editor keys
+- **Ctrl+O / Ctrl+S / Ctrl+Shift+S:** open, save, save as (also in the
+  header menu). Opening or closing with unsaved changes asks first.
+- **Ctrl+Z / Ctrl+Shift+Z:** undo and redo (or the header buttons).
+- **Enter:** play or pause the timeline. Dragging on the timeline scrubs.
+- **Escape:** clear the selection. **F2** or a double-click renames a layer.
+- **Double-click** a composition in the Library, or an instance in Layers,
+  to edit that composition; the breadcrumb over the stage goes back.
+- **Arrow keys:** a debug edit until on-stage editing arrives (M4). They
+  move the root composition's first node (the ground in the sample) by
+  10 px, or 1 px with Shift, whichever composition is being edited.
 
+These step aside while a text field or spin button has focus, or a popover
+is open. The title shows the project's name, with • while it has unsaved
+changes.
+
+## Autosave and crash recovery
 Every committed edit is autosaved to
 `$XDG_STATE_HOME/backstage2d/recovery/<pid>-<unix time>/` (usually under
-`~/.local/state`): `base.bs2d/` is the project as opened and `log.ron` holds
-one edit per line. The editor prints the directory at startup. A clean exit
-removes it only if it holds no edits; until Save exists (M3), a directory
-with edits is the only copy of that work. Restoring it from the editor also
-comes with M3.
+`~/.local/state`): `base.bs2d/` is the project as opened, `log.ron` holds
+one edit per line, and `meta.ron` records where the project is saved and
+how much of the log that covers. The editor prints the directory at
+startup and holds a lock on its log while it runs. A clean exit removes the
+directory unless there are unsaved changes. At startup the editor offers to
+restore the newest directory a crashed editor left with unsaved changes
+(Restore, Discard, or Not Now), and deletes leftovers with nothing unsaved.
+See [ADR 0004](adr/0004-commands-and-document-authority.md) §5.
 
 ## Checks
 `scripts/check.sh` runs formatting, clippy, all tests, and the headless
@@ -89,3 +104,6 @@ smoke tests for the editor and the player. See [testing.md](testing.md).
   kills the frozen stage and restarts it.
 - Closing the editor: the stage exits and `$XDG_RUNTIME_DIR/backstage2d/` is
   left empty.
+- **Editor crash:** make an edit, then `kill -9` the editor's pid (it's in
+  the recovery directory's name). The next launch offers to restore it,
+  with the undo history and the • in the title.

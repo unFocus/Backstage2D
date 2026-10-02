@@ -89,6 +89,17 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
   whole projects), lookups before any change, and a case in the
   random-edit proptest picker (`backstage_core/src/test_util.rs`).
 
+## Editor panels (M3)
+- Each panel is a relm4 component in `backstage_tools` with a **pure model
+  built from the project** (unit-tested without GTK) and a thin GTK part.
+  The app rebuilds every model in `refresh_panels()` after each commit,
+  selection change, or document swap.
+- Panel edits go through pure helpers that return `Option<Entry>`, with
+  `None` when nothing would change, so refreshing widgets never submits an
+  edit (`properties::rest_edit`, `layers::flags_edit`, …).
+- Panels work on the **edited composition** (the end of the breadcrumb,
+  `App::edited()`), never on `project.root` directly.
+
 ## How we work
 - **Plan each step first** (plan mode), get approval, then build. Keep steps
   small: roughly one roadmap bullet each.

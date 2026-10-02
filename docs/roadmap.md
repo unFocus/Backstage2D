@@ -23,9 +23,7 @@ lands with tests in the tiers described in [testing.md](testing.md).
 - [x] Pointer forwarding, and stage-side latency measured: median 16.6 ms on the RX 6800 (ADR 0002)
 - [x] Automated tests: unit, integration, golden images, wire-format snapshot, dependency boundaries, headless UI smoke
 
-## Next
-
-### M1: first real content *(done)*
+### M1: first real content
 The goal: a real project, animated over time and rendered with lyon, shown
 both in the editor's stage and in a standalone player window. The model is
 defined in [ADR 0003](adr/0003-document-model.md).
@@ -37,19 +35,19 @@ defined in [ADR 0003](adr/0003-document-model.md).
 - [x] Sample project (in the repo) and golden images of it
 - [x] `backstage_player`: a winit + wgpu window that plays a project (Space pauses, F fullscreen)
 
-### M2: edit commands and crash recovery with no lost work *(done)*
+### M2: edit commands and crash recovery with no lost work
 The design is recorded in [ADR 0004](adr/0004-commands-and-document-authority.md).
 - [x] `Command` type in core: apply returns the inverse, failures change nothing, results stay valid
 - [x] Undo/redo log: `Document` (project, history, sequence number) changed only by `Entry`s (do, undo, redo), replay, and a document hash
 - [x] Protocol: document snapshot on connect, edit commands in both directions
 - [x] The stage is the only writer: it applies each command, numbers it, and sends it out
-- [x] The editor keeps a copy of the document and autosaves the command log (restoring it after an editor crash is part of M3's Open/Save)
+- [x] The editor keeps a copy of the document and autosaves the command log (restoring it after an editor crash came in M3)
 - [x] On a stage restart, the editor sends the snapshot and replays the log. Test: replay gives an identical document (`a_restarted_stage_replays_the_editors_log`)
 - [x] Undo/Redo and a temporary debug edit in the editor, exercised by the UI smoke test
 - [x] ADR 0004: the command and document design
 - [x] Bump `PROTOCOL_VERSION` (now 2)
 
-### M3: editor panels on real data *(done)*
+### M3: editor panels on real data
 - [x] Timeline widget: one animation at a time, a row per node, and an animation picker. Scrubbing moves the stage's playhead. Time grid snapping. It shows the edited composition, fits the animation to the panel width, and shows key marks per node without editing them. Protocol v3 adds `Transport`.
 - Library, properties, and layers panels, in three steps:
   - [x] Selection and the Properties panel: the selected node's rest values (or the document settings when nothing is selected), edited through commands. Clicking a timeline row selects.
@@ -57,6 +55,8 @@ The design is recorded in [ADR 0004](adr/0004-commands-and-document-authority.md
   - [x] Library panel, and entering a composition (double-click it in the Library, or an instance in Layers): the stage, timeline, layers, and properties switch to it, with a breadcrumb back. Compositions are edited in isolation, origin at the stage centre. Protocol v4.
 - [x] Open, Save, and Save As (project folders), with a prompt for unsaved changes. Saving marks the recovery log as saved rather than clearing it, so undo still works after a save.
 - [x] Offer to restore unsaved edits from a recovery directory after an editor crash. Undo history comes back too. Orphans with nothing unsaved are cleaned up.
+
+## Next
 
 ### M4: on-stage editing
 - [ ] Hit testing, selection, bounding boxes, transform handles, all drawn by the engine. Spatial grid snapping.
@@ -73,6 +73,13 @@ The design is recorded in [ADR 0004](adr/0004-commands-and-document-authority.md
 - [ ] State machines and blend spaces (Rive-style), if not needed earlier
 
 ## Later
+- **Deferred from M3:**
+  - Timeline: zoom and scrolling, one row per property, and editing keys
+  - Layers: reordering and grouping by drag (`MoveNode` exists)
+  - Editing a composition in place, with its parent shown around it, and
+    returning to where you were when you leave it
+  - Library: renaming compositions, opening assets
+  - Restoring a choice of several crashed sessions, not just the newest
 - Zero-copy stage frames (DMA-BUF import with `GdkDmabufTexture` and `GtkGraphicsOffload`)
 - Dockable panels (libpanel)
 - Drawing tools, shape tweens, masks, text, audio, filters, blend modes
