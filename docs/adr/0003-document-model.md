@@ -291,3 +291,18 @@ pub struct Time(pub i64); // flicks
    per-animation `step`; the retro *pace* comes from the player's frame cap
    or, later, a fixed logic tick.
 8. **Configurable stage size, and a pixel-art mode** for pixel-art projects.
+
+## Addendum (2026-10-02): editor-only node flags
+Decision 5 is implemented more generally: **any node**, not only top-level
+groups, can be hidden, locked, or outlined in the editor. The flags live
+on the node (`Node::editor: NodeFlags`) and are saved with the project.
+They're omitted when off, so files without them are unchanged and
+`FORMAT_VERSION` stays 1. They're changed with `SetNodeFlags`, so they're
+undoable. A node's flags apply to its whole subtree
+(`backstage_core::editor::effective`).
+- **Playback never sees them:** `evaluate` ignores them. The editor's stage
+  filters the evaluated scene (`backstage_stage::view::editor_view`): it
+  drops hidden items and marks outlined ones, which the renderer draws as
+  thin strokes in the node's colour. The player draws the scene as it is.
+- **Lock** greys out Properties now. In M4 it will also stop picking on
+  stage.

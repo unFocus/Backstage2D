@@ -1,9 +1,10 @@
 //! The Layers panel: the edited composition's node tree (the outliner).
-//! It owns structure: selection, expanding and collapsing, and renaming.
-//! The timeline shows the same rows ([`crate::tree::visible_rows`]).
+//! It owns structure: selection, expanding and collapsing, renaming, and
+//! the editor-only hide/lock/outline toggles. The timeline shows the same
+//! rows ([`crate::tree::visible_rows`]).
 
 use crate::tree::TreeRow;
-use backstage_core::NodeId;
+use backstage_core::{Command, CompId, Entry, NodeId, Project, editor};
 use gtk::{gdk, glib, prelude::*};
 use relm4::prelude::*;
 use std::cell::Cell;
@@ -11,6 +12,26 @@ use std::rc::Rc;
 
 /// Width of the expander slot at the start of each row.
 const EXPANDER_W: i32 = 20;
+
+/// One of a node's editor-only flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flag {
+    Hidden,
+    Locked,
+    Outline,
+}
+
+/// A `SetNodeFlags` turning `flag` on or off for `node`, or `None` if the
+/// node doesn't exist.
+pub fn flags_edit(project: &Project, comp: CompId, node: NodeId, flag: Flag) -> Option<Entry> {
+    let mut flags = project.compositions.get(&comp)?.nodes.get(&node)?.editor;
+    match flag {
+        Flag::Hidden => flags.hidden = !flags.hidden,
+        Flag::Locked => flags.locked = !flags.locked,
+        Flag::Outline => flags.outline = !flags.outline,
+    }
+    Some(Entry::Do(Command::SetNodeFlags { comp, node, flags }))
+}
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct LayersModel {
@@ -33,6 +54,7 @@ pub enum LayersMsg {
     /// The list's selected row changed (by a click or the keyboard).
     RowSelected(Option<usize>),
     ToggleExpand(usize),
+    ToggleFlag(usize, Flag),
     /// Double-click or F2: edit the row's name.
     StartRename(Option<usize>),
     CommitRename(String),
@@ -43,6 +65,7 @@ pub enum LayersMsg {
 pub enum LayersOutput {
     Select(Option<NodeId>),
     ToggleExpand(NodeId),
+    ToggleFlag(NodeId, Flag),
     Rename { node: NodeId, name: String },
 }
 
@@ -119,6 +142,11 @@ impl SimpleComponent for Layers {
             LayersMsg::ToggleExpand(i) => {
                 if let Some(row) = self.model.rows.get(i) {
                     let _ = sender.output(LayersOutput::ToggleExpand(row.node));
+                }
+            }
+            LayersMsg::ToggleFlag(i, flag) => {
+                if let Some(row) = self.model.rows.get(i) {
+                    let _ = sender.output(LayersOutput::ToggleFlag(row.node, flag));
                 }
             }
             LayersMsg::StartRename(i) => self.renaming = i.filter(|i| *i < self.model.rows.len()),
@@ -211,6 +239,10 @@ fn row_widget(i: usize, row: &TreeRow, renaming: bool, sender: &ComponentSender<
         let name = gtk::Label::new(Some(&row.name));
         name.set_xalign(0.0);
         name.set_hexpand(true);
+        name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        if row.effective.hidden {
+            name.add_css_class("dim-label");
+        }
         let click = gtk::GestureClick::new();
         let s = sender.clone();
         click.connect_pressed(move |_, n, _, _| {
@@ -221,5 +253,94 @@ fn row_widget(i: usize, row: &TreeRow, renaming: bool, sender: &ComponentSender<
         name.add_controller(click);
         line.append(&name);
     }
+    for flag in [Flag::Hidden, Flag::Locked, Flag::Outline] {
+        line.append(&flag_toggle(i, row, flag, sender));
+    }
     line
+}
+
+/// A small flat button showing one flag. On if the node's own flag is set;
+/// faded if only an ancestor's is.
+fn flag_toggle(i: usize, row: &TreeRow, flag: Flag, sender: &ComponentSender<Layers>) -> gtk::Button {
+    let (own, effective) = match flag {
+        Flag::Hidden => (row.flags.hidden, row.effective.hidden),
+        Flag::Locked => (row.flags.locked, row.effective.locked),
+        Flag::Outline => (row.flags.outline, row.effective.outline),
+    };
+    let button = gtk::Button::new();
+    button.add_css_class("flat");
+    button.add_css_class("backstage-flag");
+    match flag {
+        Flag::Hidden => {
+            button.set_icon_name(if effective { "view-conceal-symbolic" } else { "view-reveal-symbolic" });
+            button.set_tooltip_text(Some(if own { "Show in the editor" } else { "Hide in the editor" }));
+        }
+        Flag::Locked => {
+            button.set_icon_name(if effective {
+                "changes-prevent-symbolic"
+            } else {
+                "changes-allow-symbolic"
+            });
+            button.set_tooltip_text(Some(if own { "Unlock" } else { "Lock" }));
+        }
+        Flag::Outline => {
+            // A square in the node's outline colour: filled when outlined.
+            let swatch = gtk::DrawingArea::new();
+            swatch.set_content_width(12);
+            swatch.set_content_height(12);
+            let [r, g, b, _] = editor::outline_color(row.node).to_rgba8();
+            swatch.set_draw_func(move |_, cr, w, h| {
+                cr.set_source_rgb(r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0);
+                cr.rectangle(1.5, 1.5, w as f64 - 3.0, h as f64 - 3.0);
+                if effective {
+                    let _ = cr.fill();
+                } else {
+                    cr.set_line_width(1.0);
+                    let _ = cr.stroke();
+                }
+            });
+            button.set_child(Some(&swatch));
+            button.set_tooltip_text(Some(if own { "Draw normally" } else { "Show as outlines" }));
+        }
+    }
+    // Off, or only inherited: faded, so the node's own settings stand out.
+    button.set_opacity(if own {
+        1.0
+    } else if effective {
+        0.55
+    } else {
+        0.3
+    });
+    let s = sender.clone();
+    button.connect_clicked(move |_| s.input(LayersMsg::ToggleFlag(i, flag)));
+    button
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use backstage_core::sample::{self, ids::*};
+
+    #[test]
+    fn flag_edits_toggle_one_flag_and_undo_exactly() {
+        let project = sample::bounce();
+        for flag in [Flag::Hidden, Flag::Locked, Flag::Outline] {
+            let Some(Entry::Do(cmd)) = flags_edit(&project, STAGE, GROUND, flag) else { panic!() };
+            let mut edited = project.clone();
+            let inverse = cmd.apply(&mut edited).unwrap();
+            let flags = edited.compositions[&STAGE].nodes[&GROUND].editor;
+            assert_eq!(
+                [flags.hidden, flags.locked, flags.outline].iter().filter(|f| **f).count(),
+                1,
+                "{flag:?}"
+            );
+            let Some(Entry::Do(back)) = flags_edit(&edited, STAGE, GROUND, flag) else { panic!() };
+            let mut again = edited.clone();
+            back.apply(&mut again).unwrap();
+            assert_eq!(again, project, "toggling twice turns it off again");
+            inverse.apply(&mut edited).unwrap();
+            assert_eq!(edited, project);
+        }
+        assert_eq!(flags_edit(&project, STAGE, NodeId::from_raw(1), Flag::Hidden), None);
+    }
 }

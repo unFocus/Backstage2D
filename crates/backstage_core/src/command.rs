@@ -9,7 +9,7 @@
 
 use crate::animation::{Key, LoopMode, Property, Track};
 use crate::id::{AnimId, CompId, NodeId};
-use crate::node::{Node, Props};
+use crate::node::{Node, NodeFlags, Props};
 use crate::project::{Composition, EditorPrefs, Project, ProjectSettings};
 use crate::time::Time;
 use crate::validate::ValidationError;
@@ -80,6 +80,12 @@ pub enum Command {
         comp: CompId,
         node: NodeId,
         name: String,
+    },
+    /// Replaces a node's editor-only flags (hide, lock, outline).
+    SetNodeFlags {
+        comp: CompId,
+        node: NodeId,
+        flags: NodeFlags,
     },
     RenameAnimation {
         comp: CompId,
@@ -171,6 +177,7 @@ impl Command {
             | RemoveNode { comp, .. }
             | MoveNode { comp, .. }
             | RenameNode { comp, .. }
+            | SetNodeFlags { comp, .. }
             | RenameAnimation { comp, .. }
             | SetAnimationTiming { comp, .. } => Some(*comp),
             SetSettings(_) | SetEditorPrefs(_) | Batch(_) => None,
@@ -321,6 +328,10 @@ impl Command {
                 let n = node_mut(composition_mut(project, *comp)?, *node)?;
                 RenameNode { comp: *comp, node: *node, name: std::mem::replace(&mut n.name, name.clone()) }
             }
+            SetNodeFlags { comp, node, flags } => {
+                let n = node_mut(composition_mut(project, *comp)?, *node)?;
+                SetNodeFlags { comp: *comp, node: *node, flags: std::mem::replace(&mut n.editor, *flags) }
+            }
             RenameAnimation { comp, anim, name } => {
                 let a = animation_mut(composition_mut(project, *comp)?, *anim)?;
                 RenameAnimation {
@@ -440,7 +451,7 @@ mod tests {
     use crate::animation::{Ease, Key, LoopMode, Property, Track, Value};
     use crate::geom::Color;
     use crate::id::{AnimId, CompId, NodeId};
-    use crate::node::{Instance, Node, NodeKind, Props, TimeMode};
+    use crate::node::{Instance, Node, NodeFlags, NodeKind, Props, TimeMode};
     use crate::project::{EditorPrefs, Project, ProjectSettings};
     use crate::sample::{self, ids::*};
     use crate::time::{Time, TimeGrid};
@@ -624,6 +635,11 @@ mod tests {
         let (p, _) = round_trip(RenameNode { comp: STAGE, node: GROUND, name: "floor".into() });
         assert_eq!(p.compositions[&STAGE].nodes[&GROUND].name, "floor");
 
+        let flags = NodeFlags { hidden: true, outline: true, ..NodeFlags::default() };
+        let (p, inverse) = round_trip(SetNodeFlags { comp: STAGE, node: GROUND, flags });
+        assert_eq!(p.compositions[&STAGE].nodes[&GROUND].editor, flags);
+        assert_eq!(inverse, SetNodeFlags { comp: STAGE, node: GROUND, flags: NodeFlags::default() });
+
         let (p, _) = round_trip(RenameAnimation { comp: BALL, anim: BALL_BOUNCE, name: "hop".into() });
         assert_eq!(p.compositions[&BALL].animations[&BALL_BOUNCE].name, "hop");
 
@@ -708,6 +724,10 @@ mod tests {
         ));
         assert!(matches!(
             fails(SetRest { comp: STAGE, node: missing, rest: Props::default() }),
+            E::MissingNode { .. }
+        ));
+        assert!(matches!(
+            fails(SetNodeFlags { comp: STAGE, node: missing, flags: NodeFlags::default() }),
             E::MissingNode { .. }
         ));
         assert!(matches!(

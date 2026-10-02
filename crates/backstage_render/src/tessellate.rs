@@ -1,6 +1,6 @@
 //! Shapes → triangle meshes (lyon), plus the paints their vertices refer to.
 
-use backstage_core::{LineCap, LineJoin, Paint, PathCmd, Shape};
+use backstage_core::{Color, LineCap, LineJoin, Paint, PathCmd, Shape};
 use bytemuck::{Pod, Zeroable};
 use lyon::math::point;
 use lyon::path::Path;
@@ -177,6 +177,35 @@ pub fn tessellate(shape: &Shape) -> Mesh {
     Mesh { vertices: buffers.vertices, indices: buffers.indices, paints }
 }
 
+/// Width of editor outlines, in the shape's own units.
+pub const OUTLINE_WIDTH: f32 = 1.0;
+
+/// The editor's outline view of `shape`: every path stroked thinly in
+/// `color`, with no fills or strokes of its own.
+pub fn tessellate_outline(shape: &Shape, color: Color) -> Mesh {
+    let mut buffers: VertexBuffers<Vertex, u32> = VertexBuffers::new();
+    let mut stroke = StrokeTessellator::new();
+    let options = StrokeOptions::tolerance(TOLERANCE).with_line_width(OUTLINE_WIDTH);
+    for styled in &shape.paths {
+        let result = stroke.tessellate_path(
+            &lyon_path(&styled.path),
+            &options,
+            &mut BuffersBuilder::new(&mut buffers, |v: StrokeVertex| Vertex {
+                pos: v.position().to_array(),
+                paint: 0,
+            }),
+        );
+        if let Err(e) = result {
+            eprintln!("backstage_render: outline tessellation failed: {e:?}");
+        }
+    }
+    Mesh {
+        vertices: buffers.vertices,
+        indices: buffers.indices,
+        paints: vec![gpu_paint(&Paint::Solid(color))],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,6 +216,27 @@ mod tests {
             let p = Vec2::from(v.pos);
             (lo.min(p), hi.max(p))
         })
+    }
+
+    #[test]
+    fn outlines_use_one_paint_and_only_thin_strokes() {
+        let shape = Shape::rect(
+            Vec2::ZERO,
+            Vec2::new(10.0, 10.0),
+            Some(Paint::Solid(Color::BLACK)),
+            Some(Stroke::solid(Color::BLACK, 6.0)),
+        );
+        let mesh = tessellate_outline(&shape, Color::rgb8(255, 0, 0));
+        assert_eq!(mesh.paints.len(), 1);
+        assert!(!mesh.indices.is_empty());
+        let (min, max) = mesh
+            .vertices
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(v.pos[0]), hi.max(v.pos[0])));
+        assert!(
+            min >= -OUTLINE_WIDTH && max <= 10.0 + OUTLINE_WIDTH,
+            "not the shape's own wide stroke: {min}..{max}"
+        );
     }
 
     #[test]

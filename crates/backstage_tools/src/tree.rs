@@ -2,7 +2,7 @@
 //! and the timeline so both always show the same rows. Which nodes are
 //! expanded is editor session state, not part of the document.
 
-use backstage_core::{Composition, NodeId};
+use backstage_core::{Composition, NodeFlags, NodeId, editor};
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -15,12 +15,17 @@ pub struct TreeRow {
     /// content is another composition; entering it is a separate step.)
     pub has_children: bool,
     pub expanded: bool,
+    /// The node's own hide/lock/outline flags.
+    pub flags: NodeFlags,
+    /// Those combined with its ancestors' (what actually applies).
+    pub effective: NodeFlags,
 }
 
 /// The rows to show: depth first in child order below the root node,
 /// descending only into expanded nodes. IDs in `expanded` that aren't in
 /// the composition are ignored.
 pub fn visible_rows(comp: &Composition, expanded: &BTreeSet<NodeId>) -> Vec<TreeRow> {
+    let effective = editor::effective(comp);
     let mut rows = Vec::new();
     let mut stack: Vec<(NodeId, usize)> = comp
         .root_node()
@@ -30,7 +35,15 @@ pub fn visible_rows(comp: &Composition, expanded: &BTreeSet<NodeId>) -> Vec<Tree
         let Some(node) = comp.nodes.get(&id) else { continue };
         let has_children = !node.children.is_empty();
         let open = has_children && expanded.contains(&id);
-        rows.push(TreeRow { node: id, name: node.name.clone(), depth, has_children, expanded: open });
+        rows.push(TreeRow {
+            node: id,
+            name: node.name.clone(),
+            depth,
+            has_children,
+            expanded: open,
+            flags: node.editor,
+            effective: effective.get(&id).copied().unwrap_or_default(),
+        });
         if open {
             stack.extend(node.children.iter().rev().map(|&c| (c, depth + 1)));
         }
@@ -128,6 +141,19 @@ pub(crate) mod tests {
         );
         let stale = BTreeSet::from([GROUP, NodeId::from_raw(1), GROUND]);
         assert_eq!(visible_rows(comp, &stale), open, "unknown or childless IDs change nothing");
+    }
+
+    #[test]
+    fn rows_carry_own_and_inherited_flags() {
+        let mut project = grouped();
+        let stage = project.compositions.get_mut(&STAGE).unwrap();
+        stage.nodes.get_mut(&GROUP).unwrap().editor.locked = true;
+        let comp = &project.compositions[&STAGE];
+        let rows = visible_rows(comp, &BTreeSet::from([GROUP]));
+        let ground = rows.iter().find(|r| r.node == GROUND).unwrap();
+        assert!(!ground.flags.locked && ground.effective.locked, "inherited from the group");
+        let ball = rows.iter().find(|r| r.node == FREE_BALL).unwrap();
+        assert_eq!(ball.effective, NodeFlags::default());
     }
 
     #[test]

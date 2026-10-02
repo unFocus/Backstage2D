@@ -43,6 +43,8 @@ pub struct Row {
     pub keys: Vec<Time>,
     pub has_children: bool,
     pub expanded: bool,
+    /// Hidden or locked in the editor (its own flag or an ancestor's).
+    pub dim: bool,
 }
 
 /// What the timeline shows.
@@ -116,6 +118,7 @@ impl TimelineModel {
                 keys,
                 has_children: row.has_children,
                 expanded: row.expanded,
+                dim: row.effective.hidden || row.effective.locked,
             });
         }
         model
@@ -646,7 +649,11 @@ fn draw(cr: &gtk::cairo::Context, drawn: &Drawn, width: f64, height: f64) -> Res
             cr.close_path();
             cr.fill()?;
         }
-        cr.set_source_rgb(0.85, 0.85, 0.88);
+        if row.dim {
+            cr.set_source_rgb(0.5, 0.5, 0.54);
+        } else {
+            cr.set_source_rgb(0.85, 0.85, 0.88);
+        }
         cr.move_to(indent + EXPANDER_W, y + ROW_H - 7.0);
         cr.show_text(&row.name)?;
         // A collapsed row's keys stand for its subtree: dimmer.

@@ -104,6 +104,13 @@ Implemented in `backstage_core::eval`.
   same rows (`tree::visible_rows`) with the same expand state; a collapsed
   row's keys are its whole subtree's, drawn dimmer. An instance has no
   expander: its content is another composition.
+- **Hide, lock, and outline** are toggles on each Layers row. They're
+  editor-only (saved with the project, undoable, never seen by playback)
+  and apply to the node's subtree; a toggle that's only inherited shows
+  faded. Hidden nodes aren't drawn on the editor's stage, outlined ones are
+  drawn as thin outlines in the node's colour (the swatch on its row), and
+  locked ones can't be edited in Properties (or, in M4, picked on stage).
+  Hidden and locked rows are dimmed in Layers and the timeline.
 - **Selection** is one node of the composition being edited. It is set from
   the timeline (and the layers panel; on stage in M4), and cleared with
   Escape or a click below the rows.

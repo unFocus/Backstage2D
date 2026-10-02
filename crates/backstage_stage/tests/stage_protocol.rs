@@ -148,6 +148,29 @@ fn the_transport_pauses_seeks_and_picks_the_animation() {
 }
 
 #[test]
+fn hidden_nodes_leave_the_editor_stage_and_undo_brings_them_back() {
+    let mut stage = StageHarness::spawn();
+    stage.handshake();
+    stage.load_sample();
+    resize(&mut stage, 550, 400);
+    let green = [0x6a as f32 / 255.0, 0xbf as f32 / 255.0, 0x4b as f32 / 255.0, 1.0];
+    // The ground strip, inside the editor's framing of the stage.
+    let ground = |stage: &mut StageHarness| stage.next_frame().pixel(275, 360);
+    assert!(color_close(ground(&mut stage), green), "{:?}", ground(&mut stage));
+
+    let hide = Entry::Do(Command::SetNodeFlags {
+        comp: ids::STAGE,
+        node: ids::GROUND,
+        flags: backstage_core::NodeFlags { hidden: true, ..Default::default() },
+    });
+    assert!(matches!(stage.submit(1, hide), ToTools::Committed { seq: 1, .. }));
+    assert!(color_close(ground(&mut stage), [1.0; 4]), "hidden: the white stage shows");
+
+    assert!(matches!(stage.submit(2, Entry::Undo), ToTools::Committed { seq: 2, .. }));
+    assert!(color_close(ground(&mut stage), green), "shown again");
+}
+
+#[test]
 fn rejected_entries_use_no_sequence_number() {
     let mut stage = StageHarness::spawn();
     stage.handshake();

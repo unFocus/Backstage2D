@@ -19,11 +19,37 @@ pub struct Node {
     pub rest: Props,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<NodeId>,
+    /// Editor-only state (hide, lock, outline). Saved with the project,
+    /// but playback never looks at it: `evaluate` ignores it.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub editor: NodeFlags,
+}
+
+/// How the editor treats a node and its subtree. None of this affects
+/// playback. See [`crate::editor`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NodeFlags {
+    /// Not drawn on the editor's stage.
+    #[serde(skip_serializing_if = "is_false")]
+    pub hidden: bool,
+    /// Can't be edited on stage or in Properties.
+    #[serde(skip_serializing_if = "is_false")]
+    pub locked: bool,
+    /// Drawn as outlines on the editor's stage.
+    #[serde(skip_serializing_if = "is_false")]
+    pub outline: bool,
 }
 
 impl Node {
     pub fn new(name: impl Into<String>, kind: NodeKind) -> Self {
-        Self { name: name.into(), kind, rest: Props::default(), children: Vec::new() }
+        Self {
+            name: name.into(),
+            kind,
+            rest: Props::default(),
+            children: Vec::new(),
+            editor: NodeFlags::default(),
+        }
     }
 
     pub fn with_rest(mut self, rest: Props) -> Self {
@@ -205,6 +231,9 @@ fn is_one(v: &f32) -> bool {
 }
 fn is_true(v: &bool) -> bool {
     *v
+}
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 #[cfg(test)]

@@ -25,6 +25,7 @@ and that undo inverts them. This ADR records how that was built.
 - `RenameNode`, `RenameAnimation`
 - `SetAnimationTiming`
 - `SetSettings`, `SetEditorPrefs`
+- `SetNodeFlags` (editor-only hide/lock/outline, added in M3)
 - `Batch`
 
 Everything is addressed by ID.

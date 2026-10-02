@@ -291,6 +291,26 @@ mod tests {
     }
 
     #[test]
+    fn editor_flags_are_saved_only_when_set() {
+        let dir = tempdir("flags");
+        let mut project = sample::bounce();
+        save(&project, &dir).unwrap();
+        let stage = fs::read_to_string(composition_file(&dir, ids::STAGE)).unwrap();
+        assert!(!stage.contains("editor"), "default flags aren't written");
+
+        let ground = project.compositions.get_mut(&ids::STAGE).unwrap().nodes.get_mut(&ids::GROUND).unwrap();
+        ground.editor = crate::NodeFlags { hidden: true, locked: false, outline: true };
+        save(&project, &dir).unwrap();
+        let stage = fs::read_to_string(composition_file(&dir, ids::STAGE)).unwrap();
+        assert!(
+            stage.contains("editor: (\n                hidden: true,\n                outline: true,"),
+            "{stage}"
+        );
+        assert_eq!(load(&dir).unwrap(), project);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn stale_compositions_are_removed() {
         let dir = tempdir("stale");
         let mut project = sample::bounce();

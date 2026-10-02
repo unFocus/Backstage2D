@@ -11,7 +11,7 @@ pub mod tessellate;
 
 pub use offscreen::{Error, FALLBACK_ENV, HeadlessGpu, OFFSCREEN_FORMAT, OffscreenTarget, adapter_options};
 
-use backstage_core::{DrawContent, Project, Scene, Shape};
+use backstage_core::{Color, DrawContent, Project, Scene, Shape};
 use bytemuck::{Pod, Zeroable};
 use glam::{Affine2, Vec2};
 use std::collections::HashMap;
@@ -37,6 +37,9 @@ pub struct Frame<'a> {
     /// Pointer position in logical pixels, if over the stage section.
     pub pointer: Option<(f32, f32)>,
     pub presentation: Presentation,
+    /// The editor's outline view: for each scene item (by index), draw it
+    /// as thin outlines in this colour instead. Empty for the player.
+    pub outlines: &'a [Option<Color>],
 }
 
 /// How the stage is framed in the viewport.
@@ -144,6 +147,8 @@ struct GpuMesh {
     paints: wgpu::BindGroup,
 }
 
+type MeshKey = (usize, Option<[u8; 4]>);
+
 pub struct Renderer {
     format: wgpu::TextureFormat,
     quad_pipeline: wgpu::RenderPipeline,
@@ -153,8 +158,9 @@ pub struct Renderer {
     paints_layout: wgpu::BindGroupLayout,
     quads: GrowBuffer,
     items: GrowBuffer,
-    /// Tessellated shapes, keyed by the shape's address in `cache_owner`.
-    meshes: HashMap<usize, GpuMesh>,
+    /// Tessellated shapes, keyed by the shape's address in `cache_owner`
+    /// and its outline colour, if drawn as an outline.
+    meshes: HashMap<MeshKey, GpuMesh>,
     cache_owner: usize,
     msaa: Option<((u32, u32), wgpu::TextureView)>,
 }
@@ -307,10 +313,12 @@ impl Renderer {
         self.meshes.clear();
     }
 
-    fn mesh_for(&mut self, device: &wgpu::Device, shape: &Shape) -> Option<&GpuMesh> {
-        let key = shape as *const Shape as usize;
+    fn mesh_for(&mut self, device: &wgpu::Device, key: MeshKey, shape: &Shape) -> Option<&GpuMesh> {
         if !self.meshes.contains_key(&key) {
-            let mesh = tessellate::tessellate(shape);
+            let mesh = match key.1 {
+                Some([r, g, b, a]) => tessellate::tessellate_outline(shape, Color::rgba8(r, g, b, a)),
+                None => tessellate::tessellate(shape),
+            };
             if mesh.indices.is_empty() || mesh.paints.is_empty() {
                 return None;
             }
@@ -388,16 +396,18 @@ impl Renderer {
         let (quads, under) = overlay_quads(&framing, frame, settings.background);
         let mut instances = Vec::with_capacity(frame.scene.items.len());
         let mut draws = Vec::with_capacity(frame.scene.items.len());
-        for item in &frame.scene.items {
+        for (i, item) in frame.scene.items.iter().enumerate() {
             let DrawContent::Shape(shape) = item.content else { continue }; // Bitmaps: not yet.
-            if self.mesh_for(device, shape).is_none() {
+            let outline = frame.outlines.get(i).copied().flatten().map(Color::to_rgba8);
+            let key = (shape as *const Shape as usize, outline);
+            if self.mesh_for(device, key, shape).is_none() {
                 continue;
             }
             let mut m = framing.view * item.transform;
             if settings.pixel_art {
                 m = snap_to_pixels(m);
             }
-            draws.push((shape as *const Shape as usize, instances.len() as u32));
+            draws.push((key, instances.len() as u32));
             instances.push(ItemInstance {
                 m0: m.matrix2.x_axis.to_array(),
                 m1: m.matrix2.y_axis.to_array(),

@@ -32,6 +32,18 @@ fn render_as(
     scale: f32,
     pointer: Option<(f32, f32)>,
 ) -> RgbaImage {
+    render_with(presentation, size, at, scale, pointer, |_| None)
+}
+
+/// `outline` picks each item's outline colour, as the editor's stage does.
+fn render_with(
+    presentation: Presentation,
+    size: (u32, u32),
+    at: Time,
+    scale: f32,
+    pointer: Option<(f32, f32)>,
+    outline: impl Fn(&backstage_core::DrawItem) -> Option<backstage_core::Color>,
+) -> RgbaImage {
     // SAFETY: set before any threads of ours read the environment.
     unsafe { std::env::set_var(FALLBACK_ENV, "1") };
     let gpu = pollster::block_on(HeadlessGpu::new("golden test")).expect("software adapter (lavapipe)");
@@ -39,7 +51,8 @@ fn render_as(
     let mut target = OffscreenTarget::new(&gpu.device, size);
     let project = sample::bounce();
     let scene = evaluate(&project, &RuntimeState::default(), at);
-    let frame = Frame { project: &project, scene: &scene, scale, pointer, presentation };
+    let outlines: Vec<_> = scene.items.iter().map(outline).collect();
+    let frame = Frame { project: &project, scene: &scene, scale, pointer, presentation, outlines: &outlines };
     let stride = target.stride() as usize;
     let mut image = RgbaImage::new(size.0, size.1);
     target
@@ -112,6 +125,21 @@ fn sample_mid_bounce_at_1_5x_with_pointer() {
 fn sample_blink() {
     // At 1.6 s the eye flipbook shows its closed drawing.
     check("sample_t1_6_blink_550x400_1x", render((550, 400), secs(8, 5), 1.0, None));
+}
+
+#[test]
+fn ground_and_free_ball_outlined() {
+    use backstage_core::{Color, sample::ids};
+    let image = render_with(Presentation::Editor, (550, 400), Time::ZERO, 1.0, None, |item| {
+        if item.node == ids::GROUND {
+            Some(Color::rgb8(0x2f, 0x6f, 0xff))
+        } else if item.instance.first() == Some(&ids::FREE_BALL) {
+            Some(Color::rgb8(0xff, 0x40, 0x40))
+        } else {
+            None
+        }
+    });
+    check("sample_t0_outlines_550x400_1x", image);
 }
 
 #[test]

@@ -3,7 +3,7 @@
 use crate::animation::{Ease, Key, LoopMode, Property, Value, ValueKind};
 use crate::command::{Command, Command::*};
 use crate::id::{AnimId, NodeId};
-use crate::node::{Instance, Node, NodeKind, Props, TimeMode};
+use crate::node::{Instance, Node, NodeFlags, NodeKind, Props, TimeMode};
 use crate::project::Project;
 use crate::time::Time;
 use proptest::prelude::*;
@@ -66,7 +66,7 @@ pub fn pick(p: &Project, seed: &Seed) -> Command {
         ValueKind::Time => Value::Time(at),
     };
     let children = c.nodes[&other].children.len();
-    match which % 9 {
+    match which % 10 {
         0 => SetRest { comp, node, rest: Props::at(x, -x) },
         1 => SetKey { comp, anim, node, property, key: Key::new(at, value, Ease::Linear) },
         2 => {
@@ -93,6 +93,11 @@ pub fn pick(p: &Project, seed: &Seed) -> Command {
         5 => RemoveNode { comp, node },
         6 => MoveNode { comp, node, parent: other, index: nth(children + 1, n[3]) },
         7 => RenameNode { comp, node, name: format!("n{}", n[3]) },
+        8 => SetNodeFlags {
+            comp,
+            node,
+            flags: NodeFlags { hidden: n[3] % 2 == 1, locked: n[3] % 3 == 1, outline: n[3] % 5 == 1 },
+        },
         _ => SetAnimationTiming {
             comp,
             anim,

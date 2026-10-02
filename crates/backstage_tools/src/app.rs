@@ -1,7 +1,7 @@
 //! The editor window: panels around a live stage section.
 
 use crate::health::{AfterExit, StageHealth};
-use crate::layers::{Layers, LayersModel, LayersMsg, LayersOutput};
+use crate::layers::{self, Layers, LayersModel, LayersMsg, LayersOutput};
 use crate::panels;
 use crate::properties::{self, Properties, PropertiesModel, PropertiesMsg, PropertiesOutput};
 use crate::recovery::{self, Candidate, Recovery};
@@ -535,6 +535,15 @@ impl App {
             LayersOutput::ToggleExpand(node) => self.toggle_expand(node),
             LayersOutput::Rename { node, name } => {
                 self.on_properties(PropertiesOutput::Rename { node, name })
+            }
+            LayersOutput::ToggleFlag(node, flag) => {
+                let entry = self.copy.as_ref().and_then(|c| {
+                    let project = c.document().project();
+                    layers::flags_edit(project, project.root, node, flag)
+                });
+                if let Some(entry) = entry {
+                    self.submit(entry);
+                }
             }
         }
     }

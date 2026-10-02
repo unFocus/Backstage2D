@@ -7,6 +7,7 @@
 pub mod animation;
 pub mod command;
 pub mod document;
+pub mod editor;
 pub mod eval;
 pub mod geom;
 pub mod id;
@@ -27,7 +28,7 @@ pub use eval::{
 pub use geom::{Color, ColorTransform, Transform, Vec2};
 pub use id::{AnimId, AssetId, CompId, DrawingId, NodeId, ParseIdError};
 pub use io::{LoadError, SaveError, from_files, load, save, to_files};
-pub use node::{BlendMode, Drawing, Instance, Node, NodeKind, Props, Repeat, TimeMode};
+pub use node::{BlendMode, Drawing, Instance, Node, NodeFlags, NodeKind, Props, Repeat, TimeMode};
 pub use project::{Asset, AssetKind, Composition, EditorPrefs, FORMAT_VERSION, Project, ProjectSettings};
 pub use shape::{GradientStop, LineCap, LineJoin, Paint, PathCmd, Shape, Stroke, StyledPath};
 pub use time::{FLICKS_PER_SECOND, ParseTimeError, Time, TimeGrid};

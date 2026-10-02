@@ -86,6 +86,9 @@ pub struct NodeView {
     pub animation: Option<String>,
     /// Number of drawings, for flipbooks.
     pub drawings: u32,
+    /// Locked in the editor (its own lock or an ancestor's): only the name
+    /// can be edited.
+    pub locked: bool,
 }
 
 impl PropertiesModel {
@@ -133,6 +136,7 @@ impl PropertiesModel {
                 NodeKind::Flipbook(drawings) => drawings.len() as u32,
                 _ => 0,
             },
+            locked: backstage_core::editor::effective(comp).get(&id).is_some_and(|f| f.locked),
         })
     }
 }
@@ -529,10 +533,20 @@ impl SimpleComponent for Properties {
                 if w.name.text() != view.name {
                     w.name.set_text(&view.name);
                 }
-                w.kind.set_label(&view.kind);
+                w.kind.set_label(&if view.locked {
+                    format!("{} · Locked", view.kind)
+                } else {
+                    view.kind.clone()
+                });
                 for (p, row) in &w.rows {
                     let shown = view.fields.contains(p);
                     row.label.set_visible(shown);
+                    let widget: &gtk::Widget = match &row.field {
+                        Field::Number(w) => w.upcast_ref(),
+                        Field::Switch(w) => w.upcast_ref(),
+                        Field::Blend(w) => w.upcast_ref(),
+                    };
+                    widget.set_sensitive(!view.locked);
                     row.keyed.set_visible(shown && view.animated.contains(p));
                     if let Some(anim) = &view.animation {
                         row.keyed.set_tooltip_text(Some(&format!(
@@ -615,6 +629,17 @@ mod tests {
         assert_eq!(eye.kind, "Flipbook");
         assert!(eye.fields.contains(&Property::Drawing));
         assert!(eye.drawings > 1);
+    }
+
+    #[test]
+    fn a_locked_node_or_a_child_of_one_is_locked() {
+        let mut project = sample::bounce();
+        let open = node(PropertiesModel::build(&project, "", STAGE, Some(GROUND), None));
+        assert!(!open.locked);
+        let stage = project.compositions.get_mut(&STAGE).unwrap();
+        stage.nodes.get_mut(&STAGE_ROOT).unwrap().editor.locked = true;
+        let inherited = node(PropertiesModel::build(&project, "", STAGE, Some(GROUND), None));
+        assert!(inherited.locked, "locked through the root group");
     }
 
     #[test]

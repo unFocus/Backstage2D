@@ -8,6 +8,7 @@
 
 mod host;
 mod transport;
+mod view;
 
 use anyhow::{Context, Result, bail};
 use backstage_core::evaluate;
@@ -131,12 +132,15 @@ fn run() -> Result<()> {
         // Nothing to show until the document arrives.
         if let (Some(t), Some(project)) = (target.as_mut(), host.project()) {
             let scene = evaluate(project, &transport.state(), transport.now(Instant::now()));
+            // Hide and outline: editor-only, so applied here, never in evaluate.
+            let (scene, outlines) = view::editor_view(project, scene);
             let frame = Frame {
                 project,
                 scene: &scene,
                 scale: scale as f32,
                 pointer,
                 presentation: Presentation::Editor,
+                outlines: &outlines,
             };
             seq += 1;
             let slot = (seq % FRAME_SLOTS as u64) as u32;

@@ -14,6 +14,10 @@ use serde::{Deserialize, Serialize};
 
 /// One step in the command log.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "almost every entry is a `Do`; boxing would allocate for each one to save space on rare undos"
+)]
 pub enum Entry {
     Do(Command),
     Undo,
