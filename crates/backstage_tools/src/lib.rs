@@ -8,6 +8,7 @@ pub mod app;
 pub mod health;
 pub mod layers;
 pub mod panels;
+pub mod path;
 pub mod properties;
 pub mod recovery;
 pub mod smoke;

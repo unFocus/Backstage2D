@@ -2,7 +2,7 @@
 //! and the timeline so both always show the same rows. Which nodes are
 //! expanded is editor session state, not part of the document.
 
-use backstage_core::{Composition, NodeFlags, NodeId, editor};
+use backstage_core::{CompId, Composition, NodeFlags, NodeId, NodeKind, editor};
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -19,6 +19,8 @@ pub struct TreeRow {
     pub flags: NodeFlags,
     /// Those combined with its ancestors' (what actually applies).
     pub effective: NodeFlags,
+    /// For an instance, the composition it shows (double-click enters it).
+    pub enters: Option<CompId>,
 }
 
 /// The rows to show: depth first in child order below the root node,
@@ -43,6 +45,10 @@ pub fn visible_rows(comp: &Composition, expanded: &BTreeSet<NodeId>) -> Vec<Tree
             expanded: open,
             flags: node.editor,
             effective: effective.get(&id).copied().unwrap_or_default(),
+            enters: match &node.kind {
+                NodeKind::Instance(i) => Some(i.comp),
+                _ => None,
+            },
         });
         if open {
             stack.extend(node.children.iter().rev().map(|&c| (c, depth + 1)));
@@ -114,6 +120,8 @@ pub(crate) mod tests {
             "instances have content, but no children of their own"
         );
         assert_eq!(rows[0].name, "ground");
+        assert_eq!(rows[0].enters, None);
+        assert_eq!(rows.iter().find(|r| r.node == FREE_BALL).unwrap().enters, Some(BALL));
         assert!(expandable(comp).is_empty());
     }
 

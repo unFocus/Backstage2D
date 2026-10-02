@@ -3,11 +3,13 @@
 //! `ToStage::Transport`; until then the stage plays its default animation
 //! from zero.
 
-use backstage_core::{AnimId, RuntimeState, Time};
+use backstage_core::{AnimId, CompId, RuntimeState, Time};
 use std::time::Instant;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Transport {
+    /// The composition shown; `None` is the root.
+    composition: Option<CompId>,
     animation: Option<AnimId>,
     /// The clock reading at `since`.
     time: Time,
@@ -18,12 +20,23 @@ pub struct Transport {
 impl Transport {
     /// Playing the default animation from zero, starting at `since`.
     pub fn new(since: Instant) -> Self {
-        Self { animation: None, time: Time::ZERO, playing: true, since }
+        Self { composition: None, animation: None, time: Time::ZERO, playing: true, since }
     }
 
     /// The editor's playhead, as received at `since`.
-    pub fn set(animation: Option<AnimId>, time: Time, playing: bool, since: Instant) -> Self {
-        Self { animation, time, playing, since }
+    pub fn set(
+        composition: Option<CompId>,
+        animation: Option<AnimId>,
+        time: Time,
+        playing: bool,
+        since: Instant,
+    ) -> Self {
+        Self { composition, animation, time, playing, since }
+    }
+
+    /// The composition to show; `None` is the root.
+    pub fn composition(&self) -> Option<CompId> {
+        self.composition
     }
 
     /// The clock reading at `at`.
@@ -35,8 +48,9 @@ impl Transport {
         self.time + Time::from_ratio(elapsed.as_nanos() as i64, 1_000_000_000)
     }
 
-    /// What `evaluate` needs: the chosen animation on the root, from time
-    /// zero. No mixer means the root's default animation.
+    /// What `evaluate` needs: the chosen animation on the shown
+    /// composition (the empty instance path), from time zero. No mixer means
+    /// its default animation.
     pub fn state(&self) -> RuntimeState {
         let mut state = RuntimeState::default();
         if let Some(anim) = self.animation {
@@ -66,16 +80,16 @@ mod tests {
     fn a_paused_clock_stays_put_and_a_playing_one_advances() {
         let t0 = Instant::now();
         let later = t0 + Duration::from_secs(3);
-        let paused = Transport::set(None, Time::from_secs(1), false, t0);
+        let paused = Transport::set(None, None, Time::from_secs(1), false, t0);
         assert_eq!(paused.now(later), Time::from_secs(1));
-        let playing = Transport::set(None, Time::from_secs(1), true, t0);
+        let playing = Transport::set(None, None, Time::from_secs(1), true, t0);
         assert_eq!(playing.now(later), Time::from_secs(4));
         assert_eq!(playing.now(t0 - Duration::from_secs(1)), Time::from_secs(1), "never runs backwards");
     }
 
     #[test]
     fn the_chosen_animation_plays_on_the_root() {
-        let transport = Transport::set(Some(STAGE_MAIN), Time::ZERO, false, Instant::now());
+        let transport = Transport::set(None, Some(STAGE_MAIN), Time::ZERO, false, Instant::now());
         let state = transport.state();
         assert_eq!(
             state.mixers[&Vec::new()].layers,

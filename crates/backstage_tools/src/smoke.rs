@@ -27,6 +27,8 @@ pub enum SmokeStep {
     Scrub(Time),
     /// Select the first node, as a click on its timeline row does.
     Select,
+    /// Enter the first instance's composition and come back out.
+    Enter,
     Nudge,
     Save,
     Restore,
@@ -44,6 +46,8 @@ enum Phase {
     AwaitScrub,
     /// Asked to select.
     AwaitSelect,
+    /// Asked to enter a composition and come back.
+    AwaitEnter,
     /// Nudged; waiting for the commit.
     AwaitNudge,
     /// Killed; waiting for a new stage to replay the log.
@@ -162,13 +166,25 @@ impl SmokeTest {
     pub fn selected(&mut self, ok: bool) -> Option<SmokeStep> {
         match (&self.phase, ok) {
             (Phase::AwaitSelect, true) => {
-                eprintln!("smoke: selected, nudging");
-                self.phase = Phase::AwaitNudge;
-                Some(SmokeStep::Nudge)
+                eprintln!("smoke: selected, entering a composition");
+                self.phase = Phase::AwaitEnter;
+                Some(SmokeStep::Enter)
             }
             (phase, ok) => {
                 Some(SmokeStep::Fail(format!("unexpected selection (ok: {ok}) in phase {phase:?}")))
             }
+        }
+    }
+
+    /// Entered a composition and came back; `ok` if both worked.
+    pub fn entered(&mut self, ok: bool) -> Option<SmokeStep> {
+        match (&self.phase, ok) {
+            (Phase::AwaitEnter, true) => {
+                eprintln!("smoke: entered a composition and came back, nudging");
+                self.phase = Phase::AwaitNudge;
+                Some(SmokeStep::Nudge)
+            }
+            (phase, ok) => Some(SmokeStep::Fail(format!("unexpected enter (ok: {ok}) in phase {phase:?}"))),
         }
     }
 
@@ -230,7 +246,8 @@ mod tests {
         assert_eq!(smoke.loaded(1, ok(0)), None);
         assert_eq!(frames(&mut smoke, 1, FRAMES_PER_PHASE), [SmokeStep::Scrub(Time::from_secs(1))]);
         assert_eq!(smoke.scrubbed(), Some(SmokeStep::Select));
-        assert_eq!(smoke.selected(true), Some(SmokeStep::Nudge));
+        assert_eq!(smoke.selected(true), Some(SmokeStep::Enter));
+        assert_eq!(smoke.entered(true), Some(SmokeStep::Nudge));
         assert_eq!(smoke.committed(1), Some(SmokeStep::Kill));
         // Frames still in flight from the killed stage don't count.
         assert_eq!(frames(&mut smoke, 1, FRAMES_PER_PHASE), []);
@@ -251,6 +268,7 @@ mod tests {
         frames(&mut smoke, 1, FRAMES_PER_PHASE);
         smoke.scrubbed();
         smoke.selected(true);
+        smoke.entered(true);
         smoke.committed(1);
         assert!(matches!(smoke.loaded(2, ok(0)), Some(SmokeStep::Fail(_))), "the edit was lost");
     }

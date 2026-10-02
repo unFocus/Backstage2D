@@ -41,7 +41,9 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
   for focused text fields, spin buttons, and popovers
   (`keys_belong_to_focus` in `app.rs`).
 - The editor owns the playhead and sends it with `ToStage::Transport`
-  (protocol v3). The editor's stage starts paused at 0.
+  (protocol v4), along with the edited composition. The editor's stage
+  starts paused at 0. Double-clicking an instance in Layers enters its
+  composition; the breadcrumb over the stage goes back.
 
 ## Architecture rules (enforced by `dependency_boundaries.rs`)
 - `backstage_core` is pure data and logic. No GPU, GUI, windowing, or lyon.

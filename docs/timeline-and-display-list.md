@@ -111,6 +111,17 @@ Implemented in `backstage_core::eval`.
   drawn as thin outlines in the node's colour (the swatch on its row), and
   locked ones can't be edited in Properties (or, in M4, picked on stage).
   Hidden and locked rows are dimmed in Layers and the timeline.
+- **Entering a composition** (Flash's "edit symbol"): double-clicking an
+  instance in Layers edits the composition it shows (F2 still renames it).
+  A breadcrumb over the stage's top-left corner ("Stage › Ball") goes back
+  out, and is hidden at the root. The composition is edited **in
+  isolation**: the stage shows only it, with its origin (registration
+  point) at the stage centre and a small dark cross there. Entering or
+  leaving clears the selection, expands every group, and shows that
+  composition's default animation paused at 0. The editor sends the edited
+  composition with the playhead (`ToStage::Transport`, protocol v4), so a
+  restarted stage comes back in it. Editing in place, with the parent shown
+  around it, can come later.
 - **Selection** is one node of the composition being edited. It is set from
   the timeline (and the layers panel; on stage in M4), and cleared with
   Escape or a click below the rows.

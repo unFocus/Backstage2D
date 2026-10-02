@@ -23,6 +23,8 @@ pub const PASTEBOARD: wgpu::Color = wgpu::Color { r: 0.23, g: 0.23, b: 0.25, a: 
 pub const LETTERBOX: wgpu::Color = wgpu::Color::BLACK;
 /// Color of the pointer crosshair.
 pub const CROSSHAIR: [f32; 4] = [0.95, 0.15, 0.45, 1.0];
+/// The edited composition's origin (registration point) mark.
+pub const ORIGIN_MARKER: [f32; 4] = [0.15, 0.15, 0.18, 0.9];
 /// Multisample count for anti-aliasing.
 pub const SAMPLE_COUNT: u32 = 4;
 /// Gap between the stage and the viewport edge, in logical pixels.
@@ -40,6 +42,9 @@ pub struct Frame<'a> {
     /// The editor's outline view: for each scene item (by index), draw it
     /// as thin outlines in this colour instead. Empty for the player.
     pub outlines: &'a [Option<Color>],
+    /// The editor's mark for the edited composition's origin, in stage
+    /// coordinates, when it isn't the stage's top-left corner.
+    pub origin_marker: Option<Vec2>,
 }
 
 /// How the stage is framed in the viewport.
@@ -499,6 +504,14 @@ fn overlay_quads(framing: &Framing, frame: &Frame, background: backstage_core::C
         color: [background.r, background.g, background.b, background.a],
     });
     let under = quads.len() as u32;
+    if let Some(origin) = frame.origin_marker.filter(|_| editor) {
+        let p = framing.view.transform_point2(origin);
+        let (px, py) = (p.x.floor() + 0.5, p.y.floor() + 0.5);
+        let (arm, thick) = (7.0 * scale, scale.max(1.0));
+        for half_size in [[arm, thick / 2.0], [thick / 2.0, arm]] {
+            quads.push(Quad { center: [px, py], half_size, angle: 0.0, color: ORIGIN_MARKER });
+        }
+    }
     if let Some((px, py)) = frame.pointer.filter(|_| editor) {
         // Snap to pixel centers so 1px lines cover whole pixels (crisp).
         let (px, py) = ((px * scale).floor() + 0.5, (py * scale).floor() + 0.5);

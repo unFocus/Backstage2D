@@ -3,6 +3,7 @@
 use crate::health::{AfterExit, StageHealth};
 use crate::layers::{self, Layers, LayersModel, LayersMsg, LayersOutput};
 use crate::panels;
+use crate::path;
 use crate::properties::{self, Properties, PropertiesModel, PropertiesMsg, PropertiesOutput};
 use crate::recovery::{self, Candidate, Recovery};
 use crate::smoke::{self, SmokeStep, SmokeTest};
@@ -11,7 +12,9 @@ use crate::supervisor::{StageEvent, Supervisor};
 use crate::timeline::{Playhead, Timeline, TimelineModel, TimelineMsg, TimelineOutput, pick_animation};
 use crate::tree;
 use crate::working_copy::{self, CommitError, SaveToError, WorkingCopy};
-use backstage_core::{Animation, Command, EditorPrefs, Entry, NodeId, Project, Time, TimeGrid};
+use backstage_core::{
+    Animation, Command, CompId, EditorPrefs, Entry, NodeId, NodeKind, Project, Time, TimeGrid,
+};
 use backstage_protocol::ToStage;
 use gtk::{gdk, gio, glib, prelude::*};
 use relm4::actions::{AccelsPlus, RelmAction, RelmActionGroup};
@@ -60,6 +63,12 @@ pub struct App {
     /// Expanded tree nodes: editor session state, shared by Layers and the
     /// timeline.
     expanded: BTreeSet<NodeId>,
+    /// The breadcrumb: the edited composition, entered from the root.
+    /// Session state; `[root]` when a document opens.
+    path: Vec<CompId>,
+    /// The breadcrumb's buttons, over the stage's top-left corner.
+    crumbs: gtk::Box,
+    input: relm4::Sender<AppMsg>,
     status: String,
     banner: Option<String>,
     frames_this_second: u32,
@@ -95,6 +104,10 @@ pub enum AppMsg {
     Layers(LayersOutput),
     /// Escape: select nothing.
     Deselect,
+    /// Edit this composition, entered from the current one.
+    Enter(CompId),
+    /// Go back to this depth of the breadcrumb (0 is the root).
+    GoTo(usize),
     Open,
     Save,
     SaveAs,
@@ -219,6 +232,7 @@ impl SimpleComponent for App {
                                     },
                                 },
                             },
+                            add_overlay: crumbs_widget,
                             add_overlay = &gtk::Label {
                                 add_css_class: "backstage-stage-status",
                                 set_halign: gtk::Align::Start,
@@ -266,6 +280,9 @@ impl SimpleComponent for App {
             selection: None,
             layers: Layers::builder().launch(()).forward(sender.input_sender(), AppMsg::Layers),
             expanded: BTreeSet::new(),
+            path: Vec::new(),
+            crumbs: gtk::Box::new(gtk::Orientation::Horizontal, 2),
+            input: sender.input_sender().clone(),
             health: StageHealth::new(Instant::now()),
             smoke: SmokeTest::from_env(),
             status: "Stage starting…".into(),
@@ -277,6 +294,12 @@ impl SimpleComponent for App {
         let timeline_widget = model.timeline.widget().clone();
         let properties_widget = model.properties.widget().clone();
         let layers_widget = model.layers.widget().clone();
+        let crumbs_widget = &model.crumbs;
+        crumbs_widget.add_css_class("backstage-crumbs");
+        crumbs_widget.set_halign(gtk::Align::Start);
+        crumbs_widget.set_valign(gtk::Align::Start);
+        crumbs_widget.set_margin_start(8);
+        crumbs_widget.set_margin_top(8);
         let file_menu = gio::Menu::new();
         file_menu.append(Some("Open…"), Some("win.open"));
         file_menu.append(Some("Save"), Some("win.save"));
@@ -284,6 +307,7 @@ impl SimpleComponent for App {
         let widgets = view_output!();
         root.add_controller(shortcuts(&sender));
         register_file_actions(&root, &sender);
+        model.path = model.copy.as_ref().map(|c| vec![c.document().project().root]).unwrap_or_default();
         model.expand_all();
         model.refresh_panels();
 
@@ -350,6 +374,14 @@ impl SimpleComponent for App {
             AppMsg::Properties(out) => self.on_properties(out),
             AppMsg::Layers(out) => self.on_layers(out),
             AppMsg::Deselect => self.select(None),
+            AppMsg::Enter(comp) => {
+                let path = path::enter(&self.path, comp);
+                self.edit_path(path);
+            }
+            AppMsg::GoTo(depth) => {
+                let path = path::go_to(&self.path, depth);
+                self.edit_path(path);
+            }
             AppMsg::Open => self.check_unsaved(Then::Open, &sender),
             AppMsg::Save => self.save(None, &sender),
             AppMsg::SaveAs => self.save_as(None, &sender),
@@ -457,10 +489,62 @@ impl App {
         }
     }
 
+    /// The composition being edited: the end of the breadcrumb.
+    fn edited(&self) -> Option<CompId> {
+        let project = self.copy.as_ref()?.document().project();
+        Some(self.path.last().copied().unwrap_or(project.root))
+    }
+
     /// The animation the timeline shows, in the current document.
     fn shown_animation(&self) -> Option<&Animation> {
-        let comp = self.copy.as_ref()?.document().project().root_composition()?;
+        let project = self.copy.as_ref()?.document().project();
+        let comp = project.compositions.get(&self.edited()?)?;
         comp.animations.get(&self.playhead.animation?)
+    }
+
+    /// Starts editing the composition at the end of `path`: the selection
+    /// clears, every group expands, and the playhead shows its default
+    /// animation, paused at 0.
+    fn edit_path(&mut self, path: Vec<CompId>) {
+        let Some(copy) = &self.copy else { return };
+        let project = copy.document().project();
+        let path = path::prune(&path, project);
+        if path == self.path {
+            return;
+        }
+        let comp = *path.last().expect("prune keeps the root");
+        let mut playhead = Playhead::new(pick_animation(project, comp, None));
+        playhead.composition = (comp != project.root).then_some(comp);
+        self.playhead = playhead;
+        self.path = path;
+        self.selection = None;
+        self.expand_all();
+        self.send_transport();
+        self.refresh_panels();
+    }
+
+    /// Rebuilds the breadcrumb's buttons. Hidden at the root.
+    fn show_crumbs(&self) {
+        while let Some(child) = self.crumbs.first_child() {
+            self.crumbs.remove(&child);
+        }
+        let Some(copy) = &self.copy else { return };
+        let names = path::crumbs(&self.path, copy.document().project());
+        self.crumbs.set_visible(names.len() > 1);
+        for (depth, name) in names.iter().enumerate() {
+            if depth > 0 {
+                self.crumbs.append(&gtk::Label::new(Some("›")));
+            }
+            let crumb = gtk::Button::with_label(name);
+            crumb.add_css_class("flat");
+            if depth + 1 == names.len() {
+                crumb.set_sensitive(false);
+            } else {
+                let input = self.input.clone();
+                crumb.connect_clicked(move |_| input.emit(AppMsg::GoTo(depth)));
+            }
+            self.crumbs.append(&crumb);
+        }
     }
 
     fn send_transport(&self) {
@@ -488,13 +572,20 @@ impl App {
             return;
         };
         let project = copy.document().project();
-        let comp = project.root;
+        // An undo could remove the edited composition: go back out.
+        let path = path::prune(&self.path, project);
+        if path != self.path {
+            return self.edit_path(path);
+        }
+        let comp = *path.last().expect("prune keeps the root");
         let exists = |id: &NodeId| project.compositions.get(&comp).is_some_and(|c| c.nodes.contains_key(id));
         let selection = self.selection.filter(exists);
         self.expanded.retain(exists);
-        let anim = pick_animation(project, self.playhead.animation);
-        let timeline =
-            TimelineModel { selected: selection, ..TimelineModel::build(project, anim, &self.expanded) };
+        let anim = pick_animation(project, comp, self.playhead.animation);
+        let timeline = TimelineModel {
+            selected: selection,
+            ..TimelineModel::build(project, comp, anim, &self.expanded)
+        };
         let rows = project
             .compositions
             .get(&comp)
@@ -511,14 +602,16 @@ impl App {
         self.properties.emit(PropertiesMsg::SetModel(properties));
         self.layers.emit(LayersMsg::SetModel(layers));
         self.show_playhead();
+        self.show_crumbs();
     }
 
-    /// Every group starts expanded when a document opens.
+    /// Every group of the edited composition starts expanded.
     fn expand_all(&mut self) {
+        let comp = self.edited();
         self.expanded = self
             .copy
             .as_ref()
-            .and_then(|c| c.document().project().root_composition().map(tree::expandable))
+            .and_then(|c| c.document().project().compositions.get(&comp?).map(tree::expandable))
             .unwrap_or_default();
     }
 
@@ -533,13 +626,17 @@ impl App {
         match out {
             LayersOutput::Select(node) => self.select(node),
             LayersOutput::ToggleExpand(node) => self.toggle_expand(node),
+            LayersOutput::Enter(comp) => {
+                let path = path::enter(&self.path, comp);
+                self.edit_path(path);
+            }
             LayersOutput::Rename { node, name } => {
                 self.on_properties(PropertiesOutput::Rename { node, name })
             }
             LayersOutput::ToggleFlag(node, flag) => {
                 let entry = self.copy.as_ref().and_then(|c| {
                     let project = c.document().project();
-                    layers::flags_edit(project, project.root, node, flag)
+                    layers::flags_edit(project, self.path.last().copied().unwrap_or(project.root), node, flag)
                 });
                 if let Some(entry) = entry {
                     self.submit(entry);
@@ -558,7 +655,7 @@ impl App {
     fn on_properties(&mut self, out: PropertiesOutput) {
         let Some(copy) = &self.copy else { return };
         let project = copy.document().project();
-        let comp = project.root;
+        let comp = self.path.last().copied().unwrap_or(project.root);
         let entry = match out {
             PropertiesOutput::EditRest { node, property, value } => {
                 properties::rest_edit(project, comp, node, property, value)
@@ -615,7 +712,9 @@ impl App {
         self.banner = None;
         self.stage_ready = false;
         let load = copy.load_message();
-        self.playhead = Playhead::new(pick_animation(copy.document().project(), None));
+        let project = copy.document().project();
+        self.playhead = Playhead::new(pick_animation(project, project.root, None));
+        self.path = vec![project.root];
         self.selection = None;
         let Some(old) = self.copy.replace(copy) else {
             self.expand_all();
@@ -801,6 +900,25 @@ impl App {
                 });
                 self.on_layers(LayersOutput::Select(first));
                 let step = self.smoke.as_mut().and_then(|s| s.selected(self.selection.is_some()));
+                self.run_smoke_step(step, sender);
+            }
+            Some(SmokeStep::Enter) => {
+                // Into the first instance's composition, as a double-click in
+                // Layers does, and back out with the root crumb.
+                let target = self.copy.as_ref().and_then(|c| {
+                    let comp = c.document().project().root_composition()?;
+                    comp.root_node()?.children.iter().find_map(|n| match &comp.nodes.get(n)?.kind {
+                        NodeKind::Instance(i) => Some(i.comp),
+                        _ => None,
+                    })
+                });
+                let entered = target.is_some_and(|comp| {
+                    self.on_layers(LayersOutput::Enter(comp));
+                    self.edited() == Some(comp) && self.path.len() == 2
+                });
+                self.edit_path(path::go_to(&self.path, 0));
+                let back = self.path.len() == 1;
+                let step = self.smoke.as_mut().and_then(|s| s.entered(entered && back));
                 self.run_smoke_step(step, sender);
             }
             Some(SmokeStep::Undo) => self.submit(Entry::Undo),

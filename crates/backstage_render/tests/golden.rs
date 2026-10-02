@@ -52,7 +52,15 @@ fn render_with(
     let project = sample::bounce();
     let scene = evaluate(&project, &RuntimeState::default(), at);
     let outlines: Vec<_> = scene.items.iter().map(outline).collect();
-    let frame = Frame { project: &project, scene: &scene, scale, pointer, presentation, outlines: &outlines };
+    let frame = Frame {
+        project: &project,
+        scene: &scene,
+        scale,
+        pointer,
+        presentation,
+        outlines: &outlines,
+        origin_marker: None,
+    };
     let stride = target.stride() as usize;
     let mut image = RgbaImage::new(size.0, size.1);
     target

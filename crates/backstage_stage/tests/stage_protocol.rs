@@ -117,8 +117,42 @@ fn committed_edits_undo_and_redo_show_on_stage() {
 /// Sets the playhead, and returns once every later frame reflects it: the
 /// stage answers requests in order, so a rejected no-op makes a barrier.
 fn transport(stage: &mut StageHarness, animation: Option<backstage_core::AnimId>, secs: f64, playing: bool) {
-    stage.send(&ToStage::Transport { animation, time: Time::from_secs_f64(secs), playing });
+    show(stage, None, animation, secs, playing);
+}
+
+/// Like [`transport`], also choosing the composition shown.
+fn show(
+    stage: &mut StageHarness,
+    composition: Option<backstage_core::CompId>,
+    animation: Option<backstage_core::AnimId>,
+    secs: f64,
+    playing: bool,
+) {
+    stage.send(&ToStage::Transport { composition, animation, time: Time::from_secs_f64(secs), playing });
     assert!(matches!(stage.submit(u64::MAX, Entry::Redo), ToTools::Rejected { .. }));
+}
+
+#[test]
+fn another_composition_is_shown_on_its_own_around_the_stage_centre() {
+    let mut stage = StageHarness::spawn();
+    stage.handshake();
+    stage.load_sample();
+    resize(&mut stage, 550, 400);
+    let orange = |p: [u8; 4]| p[0] > 200 && (90..200).contains(&p[1]) && p[2] < 100;
+    // The editor frames a 550 × 400 stage in a 550 × 400 viewport with a
+    // margin; the stage centre is the viewport centre either way. Sample
+    // just off it, clear of the origin mark's arms but inside the ball.
+    let centre = |stage: &mut StageHarness| stage.next_frame().pixel(283, 208);
+
+    show(&mut stage, None, None, 0.0, false);
+    assert!(!orange(centre(&mut stage)), "the root has nothing at the centre: {:?}", centre(&mut stage));
+
+    // At 0.5 s the bounce lands: the body sits on its origin.
+    show(&mut stage, Some(ids::BALL), None, 0.5, false);
+    assert!(orange(centre(&mut stage)), "the ball, centred: {:?}", centre(&mut stage));
+
+    show(&mut stage, Some(backstage_core::CompId::from_raw(1)), None, 0.5, false);
+    assert!(!orange(centre(&mut stage)), "an unknown composition falls back to the root");
 }
 
 #[test]

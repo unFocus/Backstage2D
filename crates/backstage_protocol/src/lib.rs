@@ -14,13 +14,13 @@ mod frame_ring;
 
 pub use frame_ring::{FRAME_SLOTS, FrameRing};
 
-use backstage_core::{AnimId, Entry, LoadError, Project, SaveError, Time};
+use backstage_core::{AnimId, CompId, Entry, LoadError, Project, SaveError, Time};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 /// Bumped on any incompatible change to the messages below.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Upper bound on a single control message, to reject garbage early. Big
 /// enough for a project snapshot.
@@ -82,11 +82,13 @@ pub enum ToStage {
         #[serde(with = "ron_text")]
         entry: Entry,
     },
-    /// The editor's playhead: the root composition plays `animation` (its
-    /// default if `None`), its clock reads `time` now, and it advances only
-    /// if `playing`. Without one, the stage plays from zero. (`AnimId` and
-    /// `Time` are plain strings, so they are safe in postcard.)
+    /// What the editor shows and its playhead: `composition` (the root if
+    /// `None`) plays `animation` (its default if `None`), its clock reads
+    /// `time` now, and it advances only if `playing`. Without one, the stage
+    /// plays the root from zero. (The IDs and `Time` are plain strings, so
+    /// they are safe in postcard.)
     Transport {
+        composition: Option<CompId>,
         animation: Option<AnimId>,
         time: Time,
         playing: bool,
@@ -211,13 +213,18 @@ mod tests {
             (proptest::collection::vec((".*", ".*"), 0..4), proptest::collection::vec(any_entry(), 0..4))
                 .prop_map(|(files, log)| ToStage::Load { base: Snapshot { files }, log }),
             (any::<u64>(), any_entry()).prop_map(|(request, entry)| ToStage::Submit { request, entry }),
-            (proptest::option::of(any::<u64>()), any::<i64>(), any::<bool>()).prop_map(
-                |(anim, flicks, playing)| ToStage::Transport {
+            (
+                proptest::option::of(any::<u64>()),
+                proptest::option::of(any::<u64>()),
+                any::<i64>(),
+                any::<bool>()
+            )
+                .prop_map(|(comp, anim, flicks, playing)| ToStage::Transport {
+                    composition: comp.map(backstage_core::CompId::from_raw),
                     animation: anim.map(backstage_core::AnimId::from_raw),
                     time: backstage_core::Time::from_flicks(flicks),
                     playing,
-                }
-            ),
+                }),
         ]
     }
 
@@ -375,11 +382,17 @@ mod tests {
             },
             ToStage::Submit { request: 7, entry: Entry::Undo },
             ToStage::Transport {
+                composition: Some(ids::BALL),
                 animation: Some(ids::STAGE_MAIN),
                 time: backstage_core::Time::from_ratio(1, 2),
                 playing: true,
             },
-            ToStage::Transport { animation: None, time: backstage_core::Time::ZERO, playing: false },
+            ToStage::Transport {
+                composition: None,
+                animation: None,
+                time: backstage_core::Time::ZERO,
+                playing: false,
+            },
         ] {
             out += &format!("{msg:?} => {}\n", hex(&msg));
         }

@@ -55,6 +55,8 @@ pub enum LayersMsg {
     RowSelected(Option<usize>),
     ToggleExpand(usize),
     ToggleFlag(usize, Flag),
+    /// Double-click on an instance: edit its composition.
+    Enter(usize),
     /// Double-click or F2: edit the row's name.
     StartRename(Option<usize>),
     CommitRename(String),
@@ -66,7 +68,12 @@ pub enum LayersOutput {
     Select(Option<NodeId>),
     ToggleExpand(NodeId),
     ToggleFlag(NodeId, Flag),
-    Rename { node: NodeId, name: String },
+    Rename {
+        node: NodeId,
+        name: String,
+    },
+    /// Edit this composition (an instance row was double-clicked).
+    Enter(CompId),
 }
 
 pub struct LayersWidgets {
@@ -147,6 +154,11 @@ impl SimpleComponent for Layers {
             LayersMsg::ToggleFlag(i, flag) => {
                 if let Some(row) = self.model.rows.get(i) {
                     let _ = sender.output(LayersOutput::ToggleFlag(row.node, flag));
+                }
+            }
+            LayersMsg::Enter(i) => {
+                if let Some(comp) = self.model.rows.get(i).and_then(|r| r.enters) {
+                    let _ = sender.output(LayersOutput::Enter(comp));
                 }
             }
             LayersMsg::StartRename(i) => self.renaming = i.filter(|i| *i < self.model.rows.len()),
@@ -243,11 +255,17 @@ fn row_widget(i: usize, row: &TreeRow, renaming: bool, sender: &ComponentSender<
         if row.effective.hidden {
             name.add_css_class("dim-label");
         }
+        // Double-click: an instance enters its composition; anything else
+        // is renamed (F2 renames instances too).
+        let enters = row.enters.is_some();
+        if enters {
+            name.set_tooltip_text(Some("Double-click to edit its composition (F2 to rename)"));
+        }
         let click = gtk::GestureClick::new();
         let s = sender.clone();
         click.connect_pressed(move |_, n, _, _| {
             if n == 2 {
-                s.input(LayersMsg::StartRename(Some(i)));
+                s.input(if enters { LayersMsg::Enter(i) } else { LayersMsg::StartRename(Some(i)) });
             }
         });
         name.add_controller(click);

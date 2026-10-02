@@ -11,7 +11,7 @@ mod transport;
 mod view;
 
 use anyhow::{Context, Result, bail};
-use backstage_core::evaluate;
+use backstage_core::{Vec2, evaluate_from};
 use backstage_protocol::{
     FRAME_SLOTS, FrameRing, PROTOCOL_VERSION, ToStage, ToTools, read_message, write_message,
 };
@@ -100,8 +100,9 @@ fn run() -> Result<()> {
                     target = Some(t);
                 }
                 Ok(ToStage::Pointer(p)) => pointer = p,
-                Ok(ToStage::Transport { animation, time, playing }) => {
-                    transport = transport::Transport::set(animation, time, playing, Instant::now());
+                Ok(ToStage::Transport { composition, animation, time, playing }) => {
+                    transport =
+                        transport::Transport::set(composition, animation, time, playing, Instant::now());
                 }
                 Ok(ToStage::Load { base, log }) => match host.load(&base, &log) {
                     Ok(reply) => {
@@ -131,9 +132,17 @@ fn run() -> Result<()> {
 
         // Nothing to show until the document arrives.
         if let (Some(t), Some(project)) = (target.as_mut(), host.project()) {
-            let scene = evaluate(project, &transport.state(), transport.now(Instant::now()));
+            // The edited composition (the root unless the editor entered
+            // another one, which is shown on its own, origin at the centre).
+            let comp = transport.composition().filter(|c| project.compositions.contains_key(c));
+            let comp = comp.unwrap_or(project.root);
+            let scene = evaluate_from(project, &transport.state(), comp, transport.now(Instant::now()));
+            let origin = (comp != project.root).then(|| {
+                let s = &project.settings;
+                Vec2::new(s.stage_width as f32, s.stage_height as f32) / 2.0
+            });
             // Hide and outline: editor-only, so applied here, never in evaluate.
-            let (scene, outlines) = view::editor_view(project, scene);
+            let (scene, outlines) = view::editor_view(project, comp, scene, origin.unwrap_or(Vec2::ZERO));
             let frame = Frame {
                 project,
                 scene: &scene,
@@ -141,6 +150,7 @@ fn run() -> Result<()> {
                 pointer,
                 presentation: Presentation::Editor,
                 outlines: &outlines,
+                origin_marker: origin,
             };
             seq += 1;
             let slot = (seq % FRAME_SLOTS as u64) as u32;

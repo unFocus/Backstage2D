@@ -8,7 +8,7 @@
 
 use crate::tree::{subtree, visible_rows};
 use backstage_core::eval::clock::local_time;
-use backstage_core::{AnimId, Animation, LoopMode, NodeId, Project, Repeat, Time, TimeGrid};
+use backstage_core::{AnimId, Animation, CompId, LoopMode, NodeId, Project, Repeat, Time, TimeGrid};
 use backstage_protocol::ToStage;
 use gtk::prelude::*;
 use relm4::prelude::*;
@@ -79,15 +79,20 @@ impl Default for TimelineModel {
 }
 
 impl TimelineModel {
-    /// The root composition with `animation` shown, with the same rows as
-    /// the Layers panel ([`visible_rows`]).
-    pub fn build(project: &Project, animation: Option<AnimId>, expanded: &BTreeSet<NodeId>) -> Self {
+    /// Composition `comp` with `animation` shown, with the same rows as the
+    /// Layers panel ([`visible_rows`]).
+    pub fn build(
+        project: &Project,
+        comp: CompId,
+        animation: Option<AnimId>,
+        expanded: &BTreeSet<NodeId>,
+    ) -> Self {
         let mut model = TimelineModel {
             grid: project.editor.time_grid,
             snap: project.editor.time_snap,
             ..Self::default()
         };
-        let Some(comp) = project.root_composition() else { return model };
+        let Some(comp) = project.compositions.get(&comp) else { return model };
         model.animations = comp.animations.iter().map(|(id, a)| (*id, a.name.clone())).collect();
         let anim = animation.and_then(|id| Some((id, comp.animations.get(&id)?)));
         if let Some((id, anim)) = anim {
@@ -125,10 +130,10 @@ impl TimelineModel {
     }
 }
 
-/// The animation to show: `current` if the root composition still has it,
+/// The animation to show: `current` if composition `comp` still has it,
 /// else its default animation, else its first.
-pub fn pick_animation(project: &Project, current: Option<AnimId>) -> Option<AnimId> {
-    let comp = project.root_composition()?;
+pub fn pick_animation(project: &Project, comp: CompId, current: Option<AnimId>) -> Option<AnimId> {
+    let comp = project.compositions.get(&comp)?;
     current
         .filter(|id| comp.animations.contains_key(id))
         .or(comp.default_animation.filter(|id| comp.animations.contains_key(id)))
@@ -237,10 +242,12 @@ pub fn scrub_time(model: &TimelineModel, layout: &Layout, x: f64) -> Time {
     t.clamp(Time::ZERO, model.duration)
 }
 
-/// The editor's transport: which animation the root plays, and its clock.
-/// The stage mirrors it (`ToStage::Transport`).
+/// The editor's transport: which composition is shown, which animation it
+/// plays, and its clock. The stage mirrors it (`ToStage::Transport`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Playhead {
+    /// The composition shown; `None` is the root.
+    pub composition: Option<CompId>,
     pub animation: Option<AnimId>,
     state: PlayState,
 }
@@ -256,9 +263,9 @@ enum PlayState {
 }
 
 impl Playhead {
-    /// Paused at the start of `animation`.
+    /// The root, paused at the start of `animation`.
     pub fn new(animation: Option<AnimId>) -> Self {
-        Self { animation, state: PlayState::Paused(Time::ZERO) }
+        Self { composition: None, animation, state: PlayState::Paused(Time::ZERO) }
     }
 
     pub fn is_playing(&self) -> bool {
@@ -316,14 +323,20 @@ impl Playhead {
         self.state = PlayState::Paused(t);
     }
 
-    /// Shows another animation, paused at its start.
+    /// Shows another animation of the same composition, paused at its
+    /// start.
     pub fn pick(&mut self, animation: Option<AnimId>) {
-        *self = Self::new(animation);
+        *self = Self { composition: self.composition, ..Self::new(animation) };
     }
 
     /// The stage's copy of this transport.
     pub fn message(&self, now: Instant) -> ToStage {
-        ToStage::Transport { animation: self.animation, time: self.clock(now), playing: self.is_playing() }
+        ToStage::Transport {
+            composition: self.composition,
+            animation: self.animation,
+            time: self.clock(now),
+            playing: self.is_playing(),
+        }
     }
 }
 
@@ -705,7 +718,12 @@ mod tests {
 
     /// Everything expanded, as a document starts.
     fn build(project: &Project, anim: Option<AnimId>) -> TimelineModel {
-        TimelineModel::build(project, anim, &crate::tree::expandable(project.root_composition().unwrap()))
+        TimelineModel::build(
+            project,
+            project.root,
+            anim,
+            &crate::tree::expandable(project.root_composition().unwrap()),
+        )
     }
 
     fn secs(num: i64, den: i64) -> Time {
@@ -767,15 +785,36 @@ mod tests {
     }
 
     #[test]
+    fn any_composition_can_be_shown() {
+        let project = sample::bounce();
+        let ball = &project.compositions[&BALL];
+        let model = TimelineModel::build(&project, BALL, Some(BALL_SQUASH), &crate::tree::expandable(ball));
+        assert_eq!(model.animations.len(), 2);
+        assert_eq!(model.rows.iter().map(|r| r.node).collect::<Vec<_>>(), [BALL_BODY]);
+        assert_eq!(model.duration, ball.animations[&BALL_SQUASH].duration);
+        assert_eq!(pick_animation(&project, BALL, None), Some(BALL_BOUNCE), "Ball's default");
+        assert_eq!(pick_animation(&project, BALL, Some(STAGE_MAIN)), Some(BALL_BOUNCE), "not Ball's");
+
+        let mut playhead = Playhead::new(Some(BALL_BOUNCE));
+        playhead.composition = Some(BALL);
+        playhead.pick(Some(BALL_SQUASH));
+        assert_eq!(playhead.composition, Some(BALL), "picking keeps the composition");
+        assert!(matches!(
+            playhead.message(Instant::now()),
+            ToStage::Transport { composition: Some(BALL), .. }
+        ));
+    }
+
+    #[test]
     fn the_picked_animation_falls_back_to_the_default_then_the_first() {
         let mut project = sample::bounce();
-        assert_eq!(pick_animation(&project, Some(STAGE_MAIN)), Some(STAGE_MAIN));
-        assert_eq!(pick_animation(&project, Some(BALL_BOUNCE)), Some(STAGE_MAIN), "not the root's");
-        assert_eq!(pick_animation(&project, None), Some(STAGE_MAIN));
+        assert_eq!(pick_animation(&project, STAGE, Some(STAGE_MAIN)), Some(STAGE_MAIN));
+        assert_eq!(pick_animation(&project, STAGE, Some(BALL_BOUNCE)), Some(STAGE_MAIN), "not the root's");
+        assert_eq!(pick_animation(&project, STAGE, None), Some(STAGE_MAIN));
         project.compositions.get_mut(&STAGE).unwrap().default_animation = None;
-        assert_eq!(pick_animation(&project, None), Some(STAGE_MAIN), "first");
+        assert_eq!(pick_animation(&project, STAGE, None), Some(STAGE_MAIN), "first");
         project.compositions.get_mut(&STAGE).unwrap().animations.clear();
-        assert_eq!(pick_animation(&project, None), None);
+        assert_eq!(pick_animation(&project, STAGE, None), None);
     }
 
     #[test]
@@ -783,7 +822,7 @@ mod tests {
         use crate::tree::tests::{GROUP, grouped};
         let project = grouped();
         let comp = &project.compositions[&STAGE];
-        let open = TimelineModel::build(&project, Some(STAGE_MAIN), &BTreeSet::from([GROUP]));
+        let open = TimelineModel::build(&project, STAGE, Some(STAGE_MAIN), &BTreeSet::from([GROUP]));
         let rows = visible_rows(comp, &BTreeSet::from([GROUP]));
         assert_eq!(
             open.rows.iter().map(|r| (r.node, r.depth)).collect::<Vec<_>>(),
@@ -803,7 +842,7 @@ mod tests {
                 Default::default(),
             )],
         });
-        let closed = TimelineModel::build(&project, Some(STAGE_MAIN), &BTreeSet::new());
+        let closed = TimelineModel::build(&project, STAGE, Some(STAGE_MAIN), &BTreeSet::new());
         assert_eq!(closed.rows.len(), 3);
         assert_eq!((closed.rows[0].node, closed.rows[0].expanded), (GROUP, false));
         assert_eq!(closed.rows[0].keys, [secs(1, 2)]);
@@ -884,7 +923,12 @@ mod tests {
         assert_eq!(playhead.local(Some(main), later), Time::from_secs(3), "ping-pong on the way back");
         assert_eq!(
             playhead.message(later),
-            ToStage::Transport { animation: Some(STAGE_MAIN), time: Time::from_secs(5), playing: true }
+            ToStage::Transport {
+                composition: None,
+                animation: Some(STAGE_MAIN),
+                time: Time::from_secs(5),
+                playing: true
+            }
         );
 
         playhead.pause(Some(main), later);
