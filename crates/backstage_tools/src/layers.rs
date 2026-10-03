@@ -36,7 +36,9 @@ pub fn flags_edit(project: &Project, comp: CompId, node: NodeId, flag: Flag) -> 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct LayersModel {
     pub rows: Vec<TreeRow>,
-    pub selected: Option<NodeId>,
+    /// The editor's selection, primary last. The list shows the primary
+    /// (multi-select UI comes later).
+    pub selected: Vec<NodeId>,
 }
 
 pub struct Layers {
@@ -142,7 +144,7 @@ impl SimpleComponent for Layers {
             }
             LayersMsg::RowSelected(i) => {
                 let node = i.and_then(|i| self.model.rows.get(i)).map(|r| r.node);
-                if node != self.model.selected {
+                if node != self.model.selected.last().copied() {
                     let _ = sender.output(LayersOutput::Select(node));
                 }
             }
@@ -184,7 +186,8 @@ impl SimpleComponent for Layers {
             }
             w.built = Some(key);
         }
-        let selected = self.model.selected.and_then(|n| self.model.rows.iter().position(|r| r.node == n));
+        let primary = self.model.selected.last().copied();
+        let selected = primary.and_then(|n| self.model.rows.iter().position(|r| r.node == n));
         match selected.and_then(|i| w.list.row_at_index(i as i32)) {
             Some(row) => w.list.select_row(Some(&row)),
             None => w.list.unselect_all(),

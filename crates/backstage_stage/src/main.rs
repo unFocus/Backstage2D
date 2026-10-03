@@ -7,6 +7,7 @@
 //! [`host`]). See `docs/adr/0002-stage-process-isolation.md`.
 
 mod host;
+mod selection;
 mod transport;
 mod view;
 
@@ -65,6 +66,9 @@ fn run() -> Result<()> {
     let mut scale = 1.0f64;
     let mut pointer = None;
     let mut transport = transport::Transport::new(Instant::now());
+    // The editor's selection (ADR 0005). Nothing draws it yet: M4's
+    // selection handles and drags read it through `Selection::shown`.
+    let mut _selection = selection::Selection::default();
     let mut next_frame = Instant::now();
     let mut next_heartbeat = Instant::now();
 
@@ -100,6 +104,7 @@ fn run() -> Result<()> {
                     target = Some(t);
                 }
                 Ok(ToStage::Pointer(p)) => pointer = p,
+                Ok(ToStage::Selection { comp, nodes }) => _selection = selection::Selection::set(comp, nodes),
                 Ok(ToStage::Transport { composition, animation, time, playing }) => {
                     transport =
                         transport::Transport::set(composition, animation, time, playing, Instant::now());

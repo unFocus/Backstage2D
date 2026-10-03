@@ -14,3 +14,4 @@
   - [0002: Stage process isolation](adr/0002-stage-process-isolation.md)
   - [0003: Document model, scene model, and time](adr/0003-document-model.md)
   - [0004: Edit commands, the document log, and document authority](adr/0004-commands-and-document-authority.md)
+  - [0005: Edit state lives in the editor; the stage mirrors it](adr/0005-edit-state.md)

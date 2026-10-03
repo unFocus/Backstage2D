@@ -2,8 +2,8 @@
 source: crates/backstage_protocol/src/lib.rs
 expression: out
 ---
-PROTOCOL_VERSION = 4
-Hello { version: 4 } => 0004
+PROTOCOL_VERSION = 5
+Hello { version: 5 } => 0005
 Resize { width: 1920, height: 1080, scale: 1.25 } => 01800fb808000000000000f43f
 Pointer(Some((10.5, 20.0))) => 0201000028410000a041
 Pointer(None) => 0200
@@ -11,8 +11,9 @@ Shutdown => 03
 Load { base: Snapshot { files: [("project.ron", "()")] }, log: [Undo, Redo] } => 04010b70726f6a6563742e726f6e0228290b5b556e646f2c5265646f5d
 Submit { request: 7, entry: Undo } => 050704556e646f
 Transport { composition: Some(comp_0000002x12001), animation: Some(anim_0000001bme800), time: 0.5s, playing: true } => 060112636f6d705f303030303030327831323030310112616e696d5f30303030303031626d6538303004302e357301
+Selection { comp: comp_0000001bme001, nodes: [node_0000001bme401, node_0000001bme404] } => 0712636f6d705f30303030303031626d6530303102126e6f64655f30303030303031626d65343031126e6f64655f30303030303031626d65343034
 Transport { composition: None, animation: None, time: 0s, playing: false } => 06000002307300
-Hello { version: 4, pid: 4242, adapter: "gpu" } => 0004922103677075
+Hello { version: 5, pid: 4242, adapter: "gpu" } => 0005922103677075
 Surface { generation: 2, path: "/run/x", width: 640, height: 480, stride: 2560 } => 0102062f72756e2f788005e0038014
 FrameReady { generation: 2, slot: 1, seq: 300 } => 020201ac02
 Log("hi") => 03026869

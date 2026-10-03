@@ -7,6 +7,8 @@ changing anything architectural.
 - ADR 0002: the stage and tools process split.
 - ADR 0003: the document model, the evaluated scene, and time.
 - ADR 0004: edit commands, the document log, and document authority.
+- ADR 0005: edit state (selection, playhead) lives in the editor; the
+  stage mirrors it.
 
 ## Environment
 - **Dev host:** Bazzite (immutable Fedora 44), KDE on Wayland, AMD RX 6800.
@@ -41,7 +43,8 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
   for focused text fields, spin buttons, and popovers
   (`keys_belong_to_focus` in `app.rs`).
 - The editor owns the playhead and sends it with `ToStage::Transport`
-  (protocol v4), along with the edited composition. The editor's stage
+  (protocol v5), along with the edited composition. The selection is a
+  list owned by the editor and mirrored with `ToStage::Selection`. The editor's stage
   starts paused at 0. Double-clicking a composition in the Library, or an
   instance in Layers, edits that composition; the breadcrumb over the
   stage goes back.
@@ -137,3 +140,6 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
   - `VertexState.buffers` holds `Option`s
 - Use `relm4::gtk` rather than depending on gtk4 separately under another
   name, so the versions stay unified.
+- `cargo test -p backstage_tools` doesn't rebuild `backstage_stage`; the
+  tests' `stage_binary()` runs `cargo build -p backstage_stage` first. A
+  stale stage speaking an older protocol just crash-loops.

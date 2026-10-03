@@ -126,9 +126,11 @@ Implemented in `backstage_core::eval`.
   composition with the playhead (`ToStage::Transport`, protocol v4), so a
   restarted stage comes back in it. Editing in place, with the parent shown
   around it, can come later.
-- **Selection** is one node of the composition being edited. It is set
-  from Layers or the timeline (and on stage in M4), and cleared with Escape
-  or a click below the timeline's rows. It lives in the editor process.
+- **Selection** is an ordered list of nodes of the composition being
+  edited, the last one primary; Properties shows the primary. Panels set it
+  to one node (multi-select comes with on-stage editing in M4); Escape or a
+  click below the timeline's rows clears it. The editor owns it and the
+  stage mirrors it (`ToStage::Selection`, ADR 0005).
 - **Properties** shows the selected node's *rest* values, or the document
   settings when nothing is selected. Every change is a command (`SetRest`,
   `RenameNode`, `SetSettings`), so it's undoable. A property the shown

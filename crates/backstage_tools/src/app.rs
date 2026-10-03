@@ -6,6 +6,7 @@ use crate::library::{Library, LibraryModel, LibraryMsg, LibraryOutput};
 use crate::path;
 use crate::properties::{self, Properties, PropertiesModel, PropertiesMsg, PropertiesOutput};
 use crate::recovery::{self, Candidate, Recovery};
+use crate::selection::SelectionSync;
 use crate::smoke::{self, SmokeStep, SmokeTest};
 use crate::stage_view::StageView;
 use crate::supervisor::{StageEvent, Supervisor};
@@ -57,8 +58,10 @@ pub struct App {
     /// The edited composition's animation and clock; the stage mirrors it.
     playhead: Playhead,
     properties: Controller<Properties>,
-    /// The selected node of the edited composition (the root, for now).
-    selection: Option<NodeId>,
+    /// The selected nodes of the edited composition, in order, the last
+    /// one primary. The editor owns it; the stage mirrors it (ADR 0005).
+    selection: Vec<NodeId>,
+    selection_sync: SelectionSync,
     layers: Controller<Layers>,
     library: Controller<Library>,
     /// Expanded tree nodes: editor session state, shared by Layers and the
@@ -279,7 +282,8 @@ impl SimpleComponent for App {
             timeline: Timeline::builder().launch(()).forward(sender.input_sender(), AppMsg::Timeline),
             playhead: Playhead::new(None),
             properties: Properties::builder().launch(()).forward(sender.input_sender(), AppMsg::Properties),
-            selection: None,
+            selection: Vec::new(),
+            selection_sync: SelectionSync::default(),
             layers: Layers::builder().launch(()).forward(sender.input_sender(), AppMsg::Layers),
             library: Library::builder().launch(()).forward(sender.input_sender(), AppMsg::Library),
             expanded: BTreeSet::new(),
@@ -522,7 +526,7 @@ impl App {
         playhead.composition = (comp != project.root).then_some(comp);
         self.playhead = playhead;
         self.path = path;
-        self.selection = None;
+        self.selection.clear();
         self.expand_all();
         self.send_transport();
         self.refresh_panels();
@@ -585,11 +589,13 @@ impl App {
         }
         let comp = *path.last().expect("prune keeps the root");
         let exists = |id: &NodeId| project.compositions.get(&comp).is_some_and(|c| c.nodes.contains_key(id));
-        let selection = self.selection.filter(exists);
+        self.selection.retain(exists);
+        let selection = self.selection.clone();
+        let primary = selection.last().copied();
         self.expanded.retain(exists);
         let anim = pick_animation(project, comp, self.playhead.animation);
         let timeline = TimelineModel {
-            selected: selection,
+            selected: selection.clone(),
             ..TimelineModel::build(project, comp, anim, &self.expanded)
         };
         let rows = project
@@ -597,9 +603,11 @@ impl App {
             .get(&comp)
             .map(|c| tree::visible_rows(c, &self.expanded))
             .unwrap_or_default();
-        let layers = LayersModel { rows, selected: selection };
-        let properties = PropertiesModel::build(project, &copy.display_name(), comp, selection, anim);
-        self.selection = selection;
+        let layers = LayersModel { rows, selected: selection.clone() };
+        let properties = PropertiesModel::build(project, &copy.display_name(), comp, primary, anim);
+        if let Some(msg) = self.selection_sync.update(comp, &selection) {
+            self.supervisor.send(&msg);
+        }
         if anim != self.playhead.animation {
             self.playhead.pick(anim);
             self.send_transport();
@@ -661,7 +669,9 @@ impl App {
     }
 
     fn select(&mut self, node: Option<NodeId>) {
-        self.selection = node;
+        // A panel click replaces the selection; adding to it comes with
+        // multi-select (M4).
+        self.selection = node.into_iter().collect();
         self.refresh_panels();
     }
 
@@ -730,7 +740,7 @@ impl App {
         let project = copy.document().project();
         self.playhead = Playhead::new(pick_animation(project, project.root, None));
         self.path = vec![project.root];
-        self.selection = None;
+        self.selection.clear();
         let Some(old) = self.copy.replace(copy) else {
             self.expand_all();
             // Nothing opened at startup, so no stage is running yet.
@@ -914,7 +924,7 @@ impl App {
                     comp.root_node()?.children.first().copied()
                 });
                 self.on_layers(LayersOutput::Select(first));
-                let step = self.smoke.as_mut().and_then(|s| s.selected(self.selection.is_some()));
+                let step = self.smoke.as_mut().and_then(|s| s.selected(!self.selection.is_empty()));
                 self.run_smoke_step(step, sender);
             }
             Some(SmokeStep::Enter) => {
@@ -986,6 +996,9 @@ impl App {
                     self.supervisor.send(&copy.load_message());
                 }
                 self.send_transport();
+                // The selection too: the next refresh sends it again.
+                self.selection_sync.reset();
+                self.refresh_panels();
                 if let Some((width, height, scale)) = self.stage_view.stage_size() {
                     self.supervisor.send(&ToStage::Resize { width, height, scale });
                 }

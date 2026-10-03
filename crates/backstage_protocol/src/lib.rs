@@ -14,13 +14,13 @@ mod frame_ring;
 
 pub use frame_ring::{FRAME_SLOTS, FrameRing};
 
-use backstage_core::{AnimId, CompId, Entry, LoadError, Project, SaveError, Time};
+use backstage_core::{AnimId, CompId, Entry, LoadError, NodeId, Project, SaveError, Time};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 /// Bumped on any incompatible change to the messages below.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Upper bound on a single control message, to reject garbage early. Big
 /// enough for a project snapshot.
@@ -92,6 +92,13 @@ pub enum ToStage {
         animation: Option<AnimId>,
         time: Time,
         playing: bool,
+    },
+    /// The editor's selection, which the stage mirrors (ADR 0005): nodes of
+    /// composition `comp`, in order, the last one primary. Sent on every
+    /// change and on every connect.
+    Selection {
+        comp: CompId,
+        nodes: Vec<NodeId>,
     },
 }
 
@@ -225,6 +232,12 @@ mod tests {
                     time: backstage_core::Time::from_flicks(flicks),
                     playing,
                 }),
+            (any::<u64>(), proptest::collection::vec(any::<u64>(), 0..4)).prop_map(|(comp, nodes)| {
+                ToStage::Selection {
+                    comp: backstage_core::CompId::from_raw(comp),
+                    nodes: nodes.into_iter().map(backstage_core::NodeId::from_raw).collect(),
+                }
+            }),
         ]
     }
 
@@ -387,6 +400,7 @@ mod tests {
                 time: backstage_core::Time::from_ratio(1, 2),
                 playing: true,
             },
+            ToStage::Selection { comp: ids::STAGE, nodes: vec![ids::GROUND, ids::EYES] },
             ToStage::Transport {
                 composition: None,
                 animation: None,

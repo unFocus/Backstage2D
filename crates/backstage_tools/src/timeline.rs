@@ -59,8 +59,8 @@ pub struct TimelineModel {
     pub rows: Vec<Row>,
     pub grid: TimeGrid,
     pub snap: bool,
-    /// The editor's selected node, highlighted.
-    pub selected: Option<NodeId>,
+    /// The editor's selected nodes, highlighted.
+    pub selected: Vec<NodeId>,
 }
 
 impl Default for TimelineModel {
@@ -73,7 +73,7 @@ impl Default for TimelineModel {
             rows: Vec::new(),
             grid: TimeGrid::default(),
             snap: true,
-            selected: None,
+            selected: Vec::new(),
         }
     }
 }
@@ -636,7 +636,7 @@ fn draw(cr: &gtk::cairo::Context, drawn: &Drawn, width: f64, height: f64) -> Res
     cr.fill()?;
     for (i, row) in model.rows.iter().enumerate() {
         let y = RULER_H + i as f64 * ROW_H;
-        if model.selected == Some(row.node) {
+        if model.selected.contains(&row.node) {
             cr.set_source_rgba(0.25, 0.45, 0.8, 0.45);
             cr.rectangle(0.0, y, width, ROW_H);
             cr.fill()?;

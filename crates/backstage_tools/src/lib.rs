@@ -11,6 +11,7 @@ pub mod library;
 pub mod path;
 pub mod properties;
 pub mod recovery;
+pub mod selection;
 pub mod smoke;
 pub mod stage_view;
 pub mod supervisor;

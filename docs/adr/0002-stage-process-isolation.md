@@ -8,8 +8,11 @@
 - **M3:** the tools panels work entirely on the editor's document copy,
   as the Consequences below predicted, so no query hooks were needed. The
   playhead and the edited composition go to the stage with
-  `ToStage::Transport`. The selection is kept in the tools process for
-  now; how the stage learns it for on-stage handles is for M4.
+  `ToStage::Transport`.
+- **Amended by [ADR 0005](0005-edit-state.md):** edit state (selection,
+  playhead, edited composition) is owned by the tools process, and the
+  stage keeps a mirror (`Transport`, `Selection`). Decision 1's
+  "selection" below is superseded.
 - **Still to build:** the on-stage edit hooks (M4), and query hooks if
   they turn out to be needed.
 
@@ -65,10 +68,13 @@ current document, as Flash did. A runaway script can only kill the player.
 ## Hooks (stage ↔ tools protocol)
 - **Query:** document tree, display list at the playhead, bounds, selection,
   and hit tests at a point.
-- **Subscribe:** committed commands, selection and playhead changes,
-  diagnostics, and heartbeats.
-- **Mutate:** submit a command, set the playhead, set the active tool and its
-  parameters.
+- **Subscribe:** committed commands, diagnostics, and heartbeats.
+- **Mirror** (tools → stage, ADR 0005): the edited composition and
+  playhead (`Transport`) and the selection (`Selection`), sent on change
+  and on connect.
+- **Report** (stage → tools, M4): on-stage picks (`Picked`), which the
+  tools process makes the selection.
+- **Mutate:** submit a command, set the active tool and its parameters.
 - **Frames:** rendered stage output, when the stage is shown inside the
   tools window (see below).
 

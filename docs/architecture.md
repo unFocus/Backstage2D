@@ -9,6 +9,7 @@
 │  GTK 4 + Relm4       │   (base + log)  │  document (single writer)    │
 │  timeline, layers,   │ ──Submit─────>  │  evaluate + renderer         │
 │  library, properties │ ──Transport──>  │  editor view (hide/outline)  │
+│                      │ ──Selection──>  │  mirrors of edit state       │
 │  selection, playhead │ <──Loaded─────  │  on-stage edit hooks (M4):   │
 │  document copy +     │ <──Committed──  │   selection, bounds, bezier, │
 │  recovery log        │ <──frames─────  │   transform, snapping        │
@@ -37,11 +38,12 @@ how edits flow between them.
 
 **Still to come:** the on-stage edit hooks (M4).
 
-**Where editor state lives today:** the selection, the playhead, the
-expanded tree nodes, and the breadcrumb of entered compositions are kept in
-the tools process. The playhead and the edited composition are sent to the
-stage with `Transport`. ADR 0002 has the stage owning selection for on-stage
-editing; how selection reaches the stage is for M4 to settle.
+**Where state lives** ([ADR 0005](adr/0005-edit-state.md)):
+- **The document:** commits ordered by the stage, saved by the editor.
+- **Edit state:** selection, playhead, the edited composition, and expanded
+  nodes. Owned by the tools process; the stage keeps mirrors (`Transport`,
+  `Selection`), resent on every connect.
+- **Stage state:** hover and the drag in progress. Owned by the stage.
 
 Rules:
 1. `backstage_core` has **no** GPU, windowing, or GUI dependencies. It can be
