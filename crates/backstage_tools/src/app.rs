@@ -16,7 +16,7 @@ use crate::working_copy::{self, CommitError, SaveToError, WorkingCopy};
 use backstage_core::{
     Animation, Command, CompId, EditorPrefs, Entry, NodeId, NodeKind, Project, Time, TimeGrid,
 };
-use backstage_protocol::ToStage;
+use backstage_protocol::{Modifiers, PointerAt, PointerEvent, ToStage};
 use gtk::{gdk, gio, glib, prelude::*};
 use relm4::actions::{AccelsPlus, RelmAction, RelmActionGroup};
 use relm4::prelude::*;
@@ -25,6 +25,16 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
+
+/// A pointer event's position and modifiers, for the stage.
+fn pointer_at(state: gdk::ModifierType, x: f64, y: f64) -> PointerAt {
+    let modifiers = Modifiers {
+        shift: state.contains(gdk::ModifierType::SHIFT_MASK),
+        ctrl: state.contains(gdk::ModifierType::CONTROL_MASK),
+        alt: state.contains(gdk::ModifierType::ALT_MASK),
+    };
+    PointerAt { x: x as f32, y: y as f32, modifiers }
+}
 
 /// Project directory to open at startup; unset means the built-in sample.
 pub const PROJECT_ENV: &str = "BACKSTAGE_PROJECT";
@@ -90,7 +100,7 @@ pub enum AppMsg {
         height: u32,
         scale: f64,
     },
-    Pointer(Option<(f32, f32)>),
+    Pointer(PointerEvent),
     /// User asked for a restart: forgives earlier crashes.
     RestartStage,
     /// Automatic restart after a crash.
@@ -229,11 +239,37 @@ impl SimpleComponent for App {
                             #[local_ref]
                             stage_view -> StageView {
                                 add_controller = gtk::EventControllerMotion {
-                                    connect_motion[sender] => move |_, x, y| {
-                                        sender.input(AppMsg::Pointer(Some((x as f32, y as f32))));
+                                    connect_motion[sender] => move |c, x, y| {
+                                        let state = c.current_event_state();
+                                        // Held: the drag gesture below reports moves.
+                                        if !state.contains(gdk::ModifierType::BUTTON1_MASK) {
+                                            sender.input(AppMsg::Pointer(PointerEvent::Move(pointer_at(state, x, y))));
+                                        }
                                     },
-                                    connect_leave[sender] => move |_| {
-                                        sender.input(AppMsg::Pointer(None));
+                                    connect_leave[sender] => move |c| {
+                                        // While held, the stage keeps getting moves (the
+                                        // press grabs the pointer); it hasn't really left.
+                                        if !c.current_event_state().contains(gdk::ModifierType::BUTTON1_MASK) {
+                                            sender.input(AppMsg::Pointer(PointerEvent::Leave));
+                                        }
+                                    },
+                                },
+                                // The primary button, and moves while it's held (also
+                                // outside the stage section: the press grabs the pointer).
+                                add_controller = gtk::GestureDrag {
+                                    connect_drag_begin[sender] => move |g, x, y| {
+                                        let at = pointer_at(g.current_event_state(), x, y);
+                                        sender.input(AppMsg::Pointer(PointerEvent::Down(at)));
+                                    },
+                                    connect_drag_update[sender] => move |g, dx, dy| {
+                                        let Some((x, y)) = g.start_point() else { return };
+                                        let at = pointer_at(g.current_event_state(), x + dx, y + dy);
+                                        sender.input(AppMsg::Pointer(PointerEvent::Move(at)));
+                                    },
+                                    connect_drag_end[sender] => move |g, dx, dy| {
+                                        let Some((x, y)) = g.start_point() else { return };
+                                        let at = pointer_at(g.current_event_state(), x + dx, y + dy);
+                                        sender.input(AppMsg::Pointer(PointerEvent::Up(at)));
                                     },
                                 },
                             },

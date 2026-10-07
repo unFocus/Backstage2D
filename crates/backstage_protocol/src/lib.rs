@@ -20,7 +20,7 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 /// Bumped on any incompatible change to the messages below.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// Upper bound on a single control message, to reject garbage early. Big
 /// enough for a project snapshot.
@@ -65,8 +65,11 @@ pub enum ToStage {
         height: u32,
         scale: f64,
     },
-    /// Pointer position in logical pixels, or `None` when it left the stage.
-    Pointer(Option<(f32, f32)>),
+    /// Pointer input over the stage section.
+    Pointer(PointerEvent),
+    /// Abandon the on-stage gesture in progress, if any (Escape), committing
+    /// nothing.
+    CancelGesture,
     Shutdown,
     /// The document to edit: a base project and the log to replay onto it.
     /// Sent on every (re)connect. The stage answers with `Loaded`.
@@ -100,6 +103,51 @@ pub enum ToStage {
         comp: CompId,
         nodes: Vec<NodeId>,
     },
+}
+
+/// Pointer input over the stage section, in logical pixels. Only the
+/// primary button presses (`Down`) and releases (`Up`); between them the
+/// pointer is held, and `Move`s keep coming even outside the section.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum PointerEvent {
+    Move(PointerAt),
+    Down(PointerAt),
+    Up(PointerAt),
+    /// The pointer left the stage section (while not held).
+    Leave,
+}
+
+impl PointerEvent {
+    /// Where it happened, except for `Leave`.
+    pub fn at(&self) -> Option<PointerAt> {
+        match *self {
+            PointerEvent::Move(at) | PointerEvent::Down(at) | PointerEvent::Up(at) => Some(at),
+            PointerEvent::Leave => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PointerAt {
+    pub x: f32,
+    pub y: f32,
+    pub modifiers: Modifiers,
+}
+
+impl PointerAt {
+    /// At `(x, y)` with no modifiers held.
+    pub fn new(x: f32, y: f32) -> Self {
+        Self { x, y, modifiers: Modifiers::default() }
+    }
+}
+
+/// Keyboard modifiers held during a pointer event. `ctrl` is the primary
+/// shortcut modifier (Command on macOS, once there's a macOS editor).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Modifiers {
+    pub shift: bool,
+    pub ctrl: bool,
+    pub alt: bool,
 }
 
 /// Stage → tools.
@@ -215,7 +263,8 @@ mod tests {
                 height,
                 scale
             }),
-            proptest::option::of((-1e6f32..1e6, -1e6f32..1e6)).prop_map(ToStage::Pointer),
+            any_pointer().prop_map(ToStage::Pointer),
+            Just(ToStage::CancelGesture),
             Just(ToStage::Shutdown),
             (proptest::collection::vec((".*", ".*"), 0..4), proptest::collection::vec(any_entry(), 0..4))
                 .prop_map(|(files, log)| ToStage::Load { base: Snapshot { files }, log }),
@@ -238,6 +287,18 @@ mod tests {
                     nodes: nodes.into_iter().map(backstage_core::NodeId::from_raw).collect(),
                 }
             }),
+        ]
+    }
+
+    fn any_pointer() -> impl Strategy<Value = PointerEvent> {
+        let at = (-1e6f32..1e6, -1e6f32..1e6, any::<(bool, bool, bool)>()).prop_map(
+            |(x, y, (shift, ctrl, alt))| PointerAt { x, y, modifiers: Modifiers { shift, ctrl, alt } },
+        );
+        prop_oneof![
+            at.clone().prop_map(PointerEvent::Move),
+            at.clone().prop_map(PointerEvent::Down),
+            at.prop_map(PointerEvent::Up),
+            Just(PointerEvent::Leave),
         ]
     }
 
@@ -386,8 +447,15 @@ mod tests {
         for msg in [
             ToStage::Hello { version: PROTOCOL_VERSION },
             ToStage::Resize { width: 1920, height: 1080, scale: 1.25 },
-            ToStage::Pointer(Some((10.5, 20.0))),
-            ToStage::Pointer(None),
+            ToStage::Pointer(PointerEvent::Move(PointerAt::new(10.5, 20.0))),
+            ToStage::Pointer(PointerEvent::Down(PointerAt {
+                x: 1.0,
+                y: 2.0,
+                modifiers: Modifiers { shift: true, ctrl: false, alt: true },
+            })),
+            ToStage::Pointer(PointerEvent::Up(PointerAt::new(3.0, 4.0))),
+            ToStage::Pointer(PointerEvent::Leave),
+            ToStage::CancelGesture,
             ToStage::Shutdown,
             ToStage::Load {
                 base: Snapshot { files: vec![("project.ron".into(), "()".into())] },

@@ -42,10 +42,16 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
   the selected layer. Window shortcuts step aside
   for focused text fields, spin buttons, and popovers
   (`keys_belong_to_focus` in `app.rs`).
-- The editor owns the playhead and sends it with `ToStage::Transport`
-  (protocol v5), along with the edited composition. The selection is a
+- The editor owns the playhead and sends it with `ToStage::Transport`,
+  along with the edited composition. The selection is a
   list owned by the editor and mirrored with `ToStage::Selection`. The editor's stage
-  starts paused at 0. Double-clicking a composition in the Library, or an
+  starts paused at 0.
+- The stage draws only when something changes (input, a commit, the
+  transport, the selection, a resize), and every 60 Hz tick while playing.
+  A paused, untouched stage sends no frames. Pointer input is
+  `ToStage::Pointer(PointerEvent)`: moves, primary-button presses and
+  releases, and modifiers (protocol v6).
+- Double-clicking a composition in the Library, or an
   instance in Layers, edits that composition; the breadcrumb over the
   stage goes back.
 

@@ -39,6 +39,11 @@ impl Transport {
         self.composition
     }
 
+    /// Whether the clock is advancing, so every tick needs a new frame.
+    pub fn playing(&self) -> bool {
+        self.playing
+    }
+
     /// The clock reading at `at`.
     pub fn now(&self, at: Instant) -> Time {
         if !self.playing {

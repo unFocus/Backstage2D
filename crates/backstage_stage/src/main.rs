@@ -45,8 +45,6 @@ fn run() -> Result<()> {
         .with_context(|| format!("connecting to {}", socket_path.display()))?;
     let inbox = spawn_reader(socket.try_clone()?);
 
-    let mut host = host::DocumentHost::default();
-
     let gpu = pollster::block_on(HeadlessGpu::new("stage"))
         .map_err(|e| anyhow::anyhow!("initializing GPU: {e}"))?;
     eprintln!("backstage_stage: using {}", gpu.adapter_name);
@@ -59,120 +57,205 @@ fn run() -> Result<()> {
         },
     )?;
 
-    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
-    let mut target: Option<Target> = None;
-    let mut generation = 0u64;
-    let mut seq = 0u64;
-    let mut scale = 1.0f64;
-    let mut pointer = None;
-    let mut transport = transport::Transport::new(Instant::now());
-    // The editor's selection (ADR 0005). Nothing draws it yet: M4's
-    // selection handles and drags read it through `Selection::shown`.
-    let mut _selection = selection::Selection::default();
-    let mut next_frame = Instant::now();
+    let mut stage = Stage::new(gpu, socket);
+    let mut next_tick = Instant::now();
     let mut next_heartbeat = Instant::now();
 
+    // Frames are drawn when something changed (input, an edit, the
+    // transport) and on a 60 Hz tick while playing. Input is drawn as soon
+    // as it arrives instead of waiting for the tick; everything queued is
+    // handled first, so a burst of pointer moves makes one frame.
     loop {
-        // Drain control messages.
+        let wake = if stage.transport.playing() { next_tick.min(next_heartbeat) } else { next_heartbeat };
+        match inbox.recv_timeout(wake.saturating_duration_since(Instant::now())) {
+            Ok(msg) => {
+                if stage.handle(msg)? == Flow::Exit {
+                    return Ok(());
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+        }
         loop {
             match inbox.try_recv() {
-                Ok(ToStage::Hello { version }) if version != PROTOCOL_VERSION => {
-                    bail!("protocol mismatch: tools {version}, stage {PROTOCOL_VERSION}")
+                Ok(msg) => {
+                    if stage.handle(msg)? == Flow::Exit {
+                        return Ok(());
+                    }
                 }
-                Ok(ToStage::Hello { .. }) => {}
-                Ok(ToStage::Resize { width, height, scale: s }) => {
-                    scale = s;
-                    if width == 0 || height == 0 {
-                        target = None;
-                        continue;
-                    }
-                    if target.as_ref().is_some_and(|t| t.offscreen.size() == (width, height)) {
-                        continue;
-                    }
-                    generation += 1;
-                    let t = Target::new(&gpu.device, (width, height), generation)?;
-                    write_message(
-                        &mut socket,
-                        &ToTools::Surface {
-                            generation,
-                            path: t.ring_path.display().to_string(),
-                            width,
-                            height,
-                            stride: t.offscreen.stride(),
-                        },
-                    )?;
-                    target = Some(t);
-                }
-                Ok(ToStage::Pointer(p)) => pointer = p,
-                Ok(ToStage::Selection { comp, nodes }) => _selection = selection::Selection::set(comp, nodes),
-                Ok(ToStage::Transport { composition, animation, time, playing }) => {
-                    transport =
-                        transport::Transport::set(composition, animation, time, playing, Instant::now());
-                }
-                Ok(ToStage::Load { base, log }) => match host.load(&base, &log) {
-                    Ok(reply) => {
-                        renderer.clear_cache();
-                        write_message(&mut socket, &reply)?;
-                    }
-                    Err(e) => {
-                        // Tell the tools process why, then fail (its
-                        // supervisor decides whether to retry).
-                        let _ = write_message(&mut socket, &ToTools::Log(e.clone()));
-                        bail!(e);
-                    }
-                },
-                Ok(ToStage::Submit { request, entry }) => {
-                    let reply = host.submit(request, &entry);
-                    if matches!(reply, ToTools::Committed { .. }) {
-                        // Meshes are cached by shape address, which adding or
-                        // removing nodes can move or reuse.
-                        renderer.clear_cache();
-                    }
-                    write_message(&mut socket, &reply)?;
-                }
-                Ok(ToStage::Shutdown) | Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
                 Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
             }
         }
 
-        // Nothing to show until the document arrives.
-        if let (Some(t), Some(project)) = (target.as_mut(), host.project()) {
-            // The edited composition (the root unless the editor entered
-            // another one, which is shown on its own, origin at the centre).
-            let comp = transport.composition().filter(|c| project.compositions.contains_key(c));
-            let comp = comp.unwrap_or(project.root);
-            let scene = evaluate_from(project, &transport.state(), comp, transport.now(Instant::now()));
-            let origin = (comp != project.root).then(|| {
-                let s = &project.settings;
-                Vec2::new(s.stage_width as f32, s.stage_height as f32) / 2.0
-            });
-            // Hide and outline: editor-only, so applied here, never in evaluate.
-            let (scene, outlines) = view::editor_view(project, comp, scene, origin.unwrap_or(Vec2::ZERO));
-            let frame = Frame {
-                project,
-                scene: &scene,
-                scale: scale as f32,
-                pointer,
-                presentation: Presentation::Editor,
-                outlines: &outlines,
-                origin_marker: origin,
-            };
-            seq += 1;
-            let slot = (seq % FRAME_SLOTS as u64) as u32;
-            t.render_into_ring(&gpu, &mut renderer, &frame, slot, seq)?;
-            write_message(&mut socket, &ToTools::FrameReady { generation: t.generation, slot, seq })?;
-        }
-
         let now = Instant::now();
+        if stage.transport.playing() && now >= next_tick {
+            stage.dirty = true;
+            next_tick += FRAME_INTERVAL;
+            if next_tick < now {
+                next_tick = now + FRAME_INTERVAL; // fell behind; don't try to catch up
+            }
+        }
+        if stage.dirty {
+            stage.draw()?;
+        }
         if now >= next_heartbeat {
-            write_message(&mut socket, &ToTools::Heartbeat)?;
+            stage.send(&ToTools::Heartbeat)?;
             next_heartbeat = now + HEARTBEAT_INTERVAL;
         }
-        next_frame += FRAME_INTERVAL;
-        match next_frame.checked_duration_since(Instant::now()) {
-            Some(wait) => std::thread::sleep(wait),
-            None => next_frame = Instant::now(), // fell behind; don't try to catch up
+    }
+}
+
+/// Whether the main loop carries on after a message.
+#[derive(Debug, PartialEq)]
+enum Flow {
+    Continue,
+    Exit,
+}
+
+/// Everything the stage process holds between messages.
+struct Stage {
+    gpu: HeadlessGpu,
+    socket: UnixStream,
+    host: host::DocumentHost,
+    renderer: Renderer,
+    target: Option<Target>,
+    generation: u64,
+    seq: u64,
+    scale: f64,
+    /// Where the pointer is over the stage section, in logical pixels.
+    pointer: Option<(f32, f32)>,
+    transport: transport::Transport,
+    /// The editor's selection (ADR 0005). Nothing draws it yet: M4's
+    /// selection handles and drags read it through `Selection::shown`.
+    selection: selection::Selection,
+    /// Something shown changed since the last frame.
+    dirty: bool,
+}
+
+impl Stage {
+    fn new(gpu: HeadlessGpu, socket: UnixStream) -> Self {
+        let renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+        Self {
+            gpu,
+            socket,
+            host: host::DocumentHost::default(),
+            renderer,
+            target: None,
+            generation: 0,
+            seq: 0,
+            scale: 1.0,
+            pointer: None,
+            transport: transport::Transport::new(Instant::now()),
+            selection: selection::Selection::default(),
+            dirty: true,
         }
+    }
+
+    fn send(&mut self, msg: &ToTools) -> Result<()> {
+        Ok(write_message(&mut self.socket, msg)?)
+    }
+
+    fn handle(&mut self, msg: ToStage) -> Result<Flow> {
+        match msg {
+            ToStage::Hello { version } if version != PROTOCOL_VERSION => {
+                bail!("protocol mismatch: tools {version}, stage {PROTOCOL_VERSION}")
+            }
+            ToStage::Hello { .. } => {}
+            ToStage::Resize { width, height, scale } => {
+                self.scale = scale;
+                self.dirty = true;
+                if width == 0 || height == 0 {
+                    self.target = None;
+                    return Ok(Flow::Continue);
+                }
+                if self.target.as_ref().is_some_and(|t| t.offscreen.size() == (width, height)) {
+                    return Ok(Flow::Continue);
+                }
+                self.generation += 1;
+                let t = Target::new(&self.gpu.device, (width, height), self.generation)?;
+                let surface = ToTools::Surface {
+                    generation: self.generation,
+                    path: t.ring_path.display().to_string(),
+                    width,
+                    height,
+                    stride: t.offscreen.stride(),
+                };
+                self.send(&surface)?;
+                self.target = Some(t);
+            }
+            ToStage::Pointer(event) => {
+                self.pointer = event.at().map(|at| (at.x, at.y));
+                self.dirty = true;
+            }
+            ToStage::CancelGesture => {} // no gestures yet
+            ToStage::Selection { comp, nodes } => {
+                self.selection = selection::Selection::set(comp, nodes);
+                self.dirty = true;
+            }
+            ToStage::Transport { composition, animation, time, playing } => {
+                self.transport =
+                    transport::Transport::set(composition, animation, time, playing, Instant::now());
+                self.dirty = true;
+            }
+            ToStage::Load { base, log } => match self.host.load(&base, &log) {
+                Ok(reply) => {
+                    self.renderer.clear_cache();
+                    self.dirty = true;
+                    self.send(&reply)?;
+                }
+                Err(e) => {
+                    // Tell the tools process why, then fail (its
+                    // supervisor decides whether to retry).
+                    let _ = self.send(&ToTools::Log(e.clone()));
+                    bail!(e);
+                }
+            },
+            ToStage::Submit { request, entry } => {
+                let reply = self.host.submit(request, &entry);
+                if matches!(reply, ToTools::Committed { .. }) {
+                    // Meshes are cached by shape address, which adding or
+                    // removing nodes can move or reuse.
+                    self.renderer.clear_cache();
+                    self.dirty = true;
+                }
+                self.send(&reply)?;
+            }
+            ToStage::Shutdown => return Ok(Flow::Exit),
+        }
+        Ok(Flow::Continue)
+    }
+
+    /// Draws a frame into the ring and announces it. Nothing to show until
+    /// there's both a surface and a document; it stays dirty until then.
+    fn draw(&mut self) -> Result<()> {
+        let (Some(t), Some(project)) = (self.target.as_mut(), self.host.project()) else { return Ok(()) };
+        // The edited composition (the root unless the editor entered
+        // another one, which is shown on its own, origin at the centre).
+        let comp = self.transport.composition().filter(|c| project.compositions.contains_key(c));
+        let comp = comp.unwrap_or(project.root);
+        let scene = evaluate_from(project, &self.transport.state(), comp, self.transport.now(Instant::now()));
+        let origin = (comp != project.root).then(|| {
+            let s = &project.settings;
+            Vec2::new(s.stage_width as f32, s.stage_height as f32) / 2.0
+        });
+        // Hide and outline: editor-only, so applied here, never in evaluate.
+        let (scene, outlines) = view::editor_view(project, comp, scene, origin.unwrap_or(Vec2::ZERO));
+        let frame = Frame {
+            project,
+            scene: &scene,
+            scale: self.scale as f32,
+            pointer: self.pointer,
+            presentation: Presentation::Editor,
+            outlines: &outlines,
+            origin_marker: origin,
+        };
+        self.seq += 1;
+        let slot = (self.seq % FRAME_SLOTS as u64) as u32;
+        t.render_into_ring(&self.gpu, &mut self.renderer, &frame, slot, self.seq)?;
+        let ready = ToTools::FrameReady { generation: t.generation, slot, seq: self.seq };
+        self.dirty = false;
+        self.send(&ready)
     }
 }
 

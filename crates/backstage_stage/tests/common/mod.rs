@@ -160,6 +160,35 @@ impl StageHarness {
         }
     }
 
+    /// Asserts that no frame arrives for `quiet`: an idle stage draws
+    /// nothing. Other messages (heartbeats) are fine.
+    pub fn assert_no_frame_for(&mut self, quiet: Duration) {
+        let frames = self.frames_for(quiet);
+        assert_eq!(frames, 0, "frames drawn while idle");
+    }
+
+    /// Reads messages for `period` and counts the frames among them.
+    pub fn frames_for(&mut self, period: Duration) -> usize {
+        let stream = self.stream.as_mut().expect("socket already closed");
+        let deadline = Instant::now() + period;
+        let mut frames = 0;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            stream.set_read_timeout(Some(left)).unwrap();
+            match read_message::<ToTools>(stream) {
+                Ok(ToTools::FrameReady { .. }) => frames += 1,
+                Ok(_) => {}
+                Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => break,
+                Err(e) => panic!("reading from stage: {e}"),
+            }
+        }
+        stream.set_read_timeout(Some(TIMEOUT)).unwrap();
+        frames
+    }
+
     /// Frame-ring files the stage currently has in its runtime directory.
     pub fn ring_files(&self) -> Vec<String> {
         let dir = self.runtime_dir.join("backstage2d");

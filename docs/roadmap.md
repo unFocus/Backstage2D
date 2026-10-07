@@ -61,7 +61,7 @@ The design is recorded in [ADR 0004](adr/0004-commands-and-document-authority.md
 ### M4: on-stage editing
 - [ ] Hit testing, selection, bounding boxes, transform handles, all drawn by the engine. Spatial grid snapping.
 - [ ] Drag gestures become commands. Undo works across them.
-- [ ] Render as soon as input arrives instead of on the fixed tick. Measure with the latency probe.
+- [x] Render as soon as input arrives instead of on the fixed tick; idle while paused. Protocol v6 carries pointer presses, releases, and modifiers. The latency probe's median went from 16.6 ms to 0.9 ms (ADR 0002).
 
 ### M5: Test Movie
 - [ ] Start `backstage_player` from the current document (Flash's Ctrl+Enter)

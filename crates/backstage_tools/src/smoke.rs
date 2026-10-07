@@ -18,7 +18,9 @@ use std::time::Duration;
 
 pub const SMOKE_ENV: &str = "BACKSTAGE_SMOKE";
 pub const SMOKE_TIMEOUT: Duration = Duration::from_secs(20);
-const FRAMES_PER_PHASE: u32 = 30;
+/// The editor's stage starts paused and draws only when something changes,
+/// so a phase sees just a frame or two; one proves the stage draws.
+const FRAMES_PER_PHASE: u32 = 1;
 
 /// What the app should do next.
 #[derive(Debug, PartialEq)]

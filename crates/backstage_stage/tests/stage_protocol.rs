@@ -5,7 +5,7 @@ mod common;
 
 use backstage_core::sample::{self, ids};
 use backstage_core::{Color, Command, Document, Entry, ProjectSettings, Time};
-use backstage_protocol::{Snapshot, ToStage, ToTools};
+use backstage_protocol::{PointerAt, PointerEvent, Snapshot, ToStage, ToTools};
 use backstage_render::{CROSSHAIR, PASTEBOARD};
 use common::{StageHarness, color_close};
 use std::time::{Duration, Instant};
@@ -116,6 +116,9 @@ fn committed_edits_undo_and_redo_show_on_stage() {
 
 /// Sets the playhead, and returns once every later frame reflects it: the
 /// stage answers requests in order, so a rejected no-op makes a barrier.
+/// A paused stage draws only when something changes, and its frame for the
+/// new playhead may come before the barrier's answer, so a pointer `Leave`
+/// after the barrier makes sure one more frame follows it.
 fn transport(stage: &mut StageHarness, animation: Option<backstage_core::AnimId>, secs: f64, playing: bool) {
     show(stage, None, animation, secs, playing);
 }
@@ -129,7 +132,9 @@ fn show(
     playing: bool,
 ) {
     stage.send(&ToStage::Transport { composition, animation, time: Time::from_secs_f64(secs), playing });
-    assert!(matches!(stage.submit(u64::MAX, Entry::Redo), ToTools::Rejected { .. }));
+    stage.send(&ToStage::Submit { request: u64::MAX, entry: Entry::Redo });
+    stage.send(&ToStage::Pointer(PointerEvent::Leave));
+    stage.recv_until(|m| matches!(m, ToTools::Rejected { request: u64::MAX, .. }).then_some(()));
 }
 
 #[test]
@@ -164,8 +169,6 @@ fn the_transport_pauses_seeks_and_picks_the_animation() {
 
     transport(&mut stage, None, 0.5, false);
     let paused = stage.next_frame().pixels;
-    std::thread::sleep(Duration::from_millis(100));
-    assert!(stage.next_frame().pixels == paused, "a paused stage draws the same frame");
 
     transport(&mut stage, None, 1.5, false);
     assert!(stage.next_frame().pixels != paused, "seeking moves the scene");
@@ -311,7 +314,7 @@ fn pointer_draws_crosshair() {
     stage.handshake();
     stage.load_sample();
     resize(&mut stage, 320, 200);
-    stage.send(&ToStage::Pointer(Some((40.0, 30.0))));
+    stage.send(&move_to(40.0, 30.0));
     let deadline = Instant::now() + common::TIMEOUT;
     while Instant::now() < deadline {
         if color_close(stage.next_frame().pixel(40, 30), CROSSHAIR) {
@@ -319,6 +322,33 @@ fn pointer_draws_crosshair() {
         }
     }
     panic!("crosshair never appeared");
+}
+
+fn move_to(x: f32, y: f32) -> ToStage {
+    ToStage::Pointer(PointerEvent::Move(PointerAt::new(x, y)))
+}
+
+/// Paused and untouched, the stage draws nothing; input is drawn right
+/// away, in one frame, without waiting for a tick.
+#[test]
+fn a_paused_stage_idles_until_input_arrives() {
+    let mut stage = StageHarness::spawn();
+    stage.handshake();
+    stage.load_sample();
+    resize(&mut stage, 320, 200);
+    transport(&mut stage, None, 0.0, false);
+    // The barrier may leave one more frame in flight; let it land.
+    stage.next_frame();
+    stage.frames_for(Duration::from_millis(200));
+    stage.assert_no_frame_for(Duration::from_millis(300));
+
+    stage.send(&move_to(40.0, 30.0));
+    assert!(color_close(stage.next_frame().pixel(40, 30), CROSSHAIR), "the move, in the next frame");
+    stage.assert_no_frame_for(Duration::from_millis(100));
+
+    stage.send(&ToStage::Pointer(PointerEvent::Leave));
+    assert!(!color_close(stage.next_frame().pixel(40, 30), CROSSHAIR), "gone after Leave");
+    stage.assert_no_frame_for(Duration::from_millis(100));
 }
 
 /// Pointer → frame latency on the stage side: time from sending `Pointer`
@@ -334,13 +364,15 @@ fn latency_probe() {
     let adapter = stage.handshake();
     stage.load_sample();
     resize(&mut stage, 1280, 720);
+    // Paused, as the editor's stage starts: only input makes frames.
+    transport(&mut stage, None, 0.0, false);
     stage.next_frame();
 
     let mut samples = Vec::new();
     for i in 0..60u32 {
         // Alternate between two spots on the pasteboard, clear of the stage.
         let (x, y) = if i % 2 == 0 { (20.0, 20.0) } else { (1260.0, 700.0) };
-        stage.send(&ToStage::Pointer(Some((x, y))));
+        stage.send(&move_to(x, y));
         let sent = Instant::now();
         loop {
             if color_close(stage.next_frame().pixel(x as u32, y as u32), CROSSHAIR) {

@@ -121,6 +121,20 @@ crosshair: **min 7.8 ms, median 16.6 ms, p95 17 ms**.
 - **Improvements, when drag feel needs it:** render as soon as input
   arrives instead of waiting for the tick, then switch to zero-copy (C).
 
+### Rendering on input (M4, 2026-10-07)
+The stage now draws when something changes instead of on a fixed tick:
+- **Input, edits, the transport, the selection, or a resize:** it handles
+  everything queued, then draws one frame. A burst of pointer moves makes
+  one frame.
+- **While playing:** it also keeps the 60 Hz tick.
+- **Paused with nothing changing:** it draws nothing (heartbeats only).
+
+The probe, now run on a paused stage as the editor starts it: **min 0.9 ms,
+median 0.9 ms, p95 1.0–1.6 ms** on the RX 6800 (lavapipe: median 3.5 ms).
+That's the readback plus the socket round trip. The GTK upload and the
+compositor are still not included, and they are now most of the delay,
+which makes zero-copy (C) the next improvement.
+
 ## Consequences
 - The tools process never links wgpu, the renderer, or the VM. It only
   speaks the protocol.
