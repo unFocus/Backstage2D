@@ -26,6 +26,13 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+/// The stage status line's frame rate. A paused stage with nothing changing
+/// draws no frames at all, which is idle, not stuck (a hang shows up as a
+/// missed heartbeat instead).
+fn frame_rate(fps: u32) -> String {
+    if fps == 0 { "idle".into() } else { format!("{fps} fps") }
+}
+
 /// A pointer event's position and modifiers, for the stage.
 fn pointer_at(state: gdk::ModifierType, x: f64, y: f64) -> PointerAt {
     let modifiers = Modifiers {
@@ -280,7 +287,7 @@ impl SimpleComponent for App {
                                 set_valign: gtk::Align::End,
                                 set_margin_all: 8,
                                 #[watch]
-                                set_label: &format!("{} · {} fps", model.status, model.fps),
+                                set_label: &format!("{} · {}", model.status, frame_rate(model.fps)),
                             },
                             add_overlay = &gtk::Label {
                                 add_css_class: "backstage-stage-banner",
@@ -1261,9 +1268,15 @@ const CSS: &str = "
 
 #[cfg(test)]
 mod tests {
-    use super::nudge_entry;
+    use super::{frame_rate, nudge_entry};
     use backstage_core::sample::{self, ids::*};
     use backstage_core::{Command, Entry, Props};
+
+    #[test]
+    fn no_frames_reads_as_idle() {
+        assert_eq!(frame_rate(0), "idle");
+        assert_eq!(frame_rate(60), "60 fps");
+    }
 
     #[test]
     fn nudge_moves_the_first_top_level_node_from_where_it_is() {
