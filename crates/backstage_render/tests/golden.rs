@@ -7,7 +7,8 @@
 
 use backstage_core::{RuntimeState, Time, evaluate, sample};
 use backstage_render::{
-    FALLBACK_ENV, Frame, HeadlessGpu, OFFSCREEN_FORMAT, OffscreenTarget, Presentation, Renderer,
+    FALLBACK_ENV, Frame, HOVER, HeadlessGpu, OFFSCREEN_FORMAT, OffscreenTarget, Overlay, Presentation,
+    Renderer, SELECTION,
 };
 use image::{Rgba, RgbaImage};
 use std::path::{Path, PathBuf};
@@ -32,10 +33,11 @@ fn render_as(
     scale: f32,
     pointer: Option<(f32, f32)>,
 ) -> RgbaImage {
-    render_with(presentation, size, at, scale, pointer, |_| None)
+    render_with(presentation, size, at, scale, pointer, |_| None, |_| Vec::new())
 }
 
-/// `outline` picks each item's outline colour, as the editor's stage does.
+/// `outline` picks each item's outline colour, and `overlay` the marks
+/// drawn over the scene, as the editor's stage does.
 fn render_with(
     presentation: Presentation,
     size: (u32, u32),
@@ -43,6 +45,7 @@ fn render_with(
     scale: f32,
     pointer: Option<(f32, f32)>,
     outline: impl Fn(&backstage_core::DrawItem) -> Option<backstage_core::Color>,
+    overlay: impl Fn(&backstage_core::Scene) -> Vec<Overlay>,
 ) -> RgbaImage {
     // SAFETY: set before any threads of ours read the environment.
     unsafe { std::env::set_var(FALLBACK_ENV, "1") };
@@ -52,6 +55,7 @@ fn render_with(
     let project = sample::bounce();
     let scene = evaluate(&project, &RuntimeState::default(), at);
     let outlines: Vec<_> = scene.items.iter().map(outline).collect();
+    let overlay = overlay(&scene);
     let frame = Frame {
         project: &project,
         scene: &scene,
@@ -60,6 +64,7 @@ fn render_with(
         presentation,
         outlines: &outlines,
         origin_marker: None,
+        overlay: &overlay,
     };
     let stride = target.stride() as usize;
     let mut image = RgbaImage::new(size.0, size.1);
@@ -138,16 +143,53 @@ fn sample_blink() {
 #[test]
 fn ground_and_free_ball_outlined() {
     use backstage_core::{Color, sample::ids};
-    let image = render_with(Presentation::Editor, (550, 400), Time::ZERO, 1.0, None, |item| {
-        if item.node == ids::GROUND {
-            Some(Color::rgb8(0x2f, 0x6f, 0xff))
-        } else if item.instance.first() == Some(&ids::FREE_BALL) {
-            Some(Color::rgb8(0xff, 0x40, 0x40))
-        } else {
-            None
-        }
-    });
+    let image = render_with(
+        Presentation::Editor,
+        (550, 400),
+        Time::ZERO,
+        1.0,
+        None,
+        |item| {
+            if item.node == ids::GROUND {
+                Some(Color::rgb8(0x2f, 0x6f, 0xff))
+            } else if item.instance.first() == Some(&ids::FREE_BALL) {
+                Some(Color::rgb8(0xff, 0x40, 0x40))
+            } else {
+                None
+            }
+        },
+        |_| Vec::new(),
+    );
     check("sample_t0_outlines_550x400_1x", image);
+}
+
+#[test]
+fn selection_and_hover_boxes() {
+    use backstage_core::sample::ids;
+    use backstage_render::pick::{Rect, item_bounds};
+    // The ground selected; the free ball (all of its instance's items)
+    // under the pointer.
+    let bounds = |scene: &backstage_core::Scene, owned: &dyn Fn(&backstage_core::DrawItem) -> bool| {
+        scene.items.iter().filter(|i| owned(i)).filter_map(item_bounds).reduce(Rect::union).unwrap()
+    };
+    let image = render_with(
+        Presentation::Editor,
+        (550, 400),
+        Time::ZERO,
+        1.0,
+        None,
+        |_| None,
+        |scene| {
+            vec![
+                Overlay::Box { rect: bounds(scene, &|i| i.node == ids::GROUND), color: SELECTION },
+                Overlay::Box {
+                    rect: bounds(scene, &|i| i.instance.first() == Some(&ids::FREE_BALL)),
+                    color: HOVER,
+                },
+            ]
+        },
+    );
+    check("sample_t0_selection_hover_550x400_1x", image);
 }
 
 #[test]

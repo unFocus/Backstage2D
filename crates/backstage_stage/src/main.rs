@@ -7,16 +7,21 @@
 //! [`host`]). See `docs/adr/0002-stage-process-isolation.md`.
 
 mod host;
+mod pick;
 mod selection;
 mod transport;
 mod view;
 
 use anyhow::{Context, Result, bail};
-use backstage_core::{Vec2, evaluate_from};
+use backstage_core::{Color, CompId, NodeId, Project, Scene, Vec2, evaluate_from};
 use backstage_protocol::{
-    FRAME_SLOTS, FrameRing, PROTOCOL_VERSION, ToStage, ToTools, read_message, write_message,
+    FRAME_SLOTS, FrameRing, PROTOCOL_VERSION, PickMode, PointerAt, PointerEvent, ToStage, ToTools,
+    read_message, write_message,
 };
-use backstage_render::{Frame, HeadlessGpu, OFFSCREEN_FORMAT, OffscreenTarget, Presentation, Renderer};
+use backstage_render::{
+    Frame, Framing, HOVER, HeadlessGpu, OFFSCREEN_FORMAT, OffscreenTarget, Overlay, Presentation, Renderer,
+    SELECTION, frame_stage,
+};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -24,6 +29,8 @@ use std::time::{Duration, Instant};
 
 const FRAME_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 60);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
+/// How far off a stroke a click still hits it, in logical pixels.
+const PICK_SLOP: f32 = 3.0;
 
 fn main() -> Result<()> {
     match run() {
@@ -125,9 +132,12 @@ struct Stage {
     scale: f64,
     /// Where the pointer is over the stage section, in logical pixels.
     pointer: Option<(f32, f32)>,
+    /// The primary button is down (between `Down` and `Up`).
+    held: bool,
+    /// The node a click would pick right now (stage state, ADR 0005).
+    hover: Option<NodeId>,
     transport: transport::Transport,
-    /// The editor's selection (ADR 0005). Nothing draws it yet: M4's
-    /// selection handles and drags read it through `Selection::shown`.
+    /// The editor's selection (ADR 0005), changed here first by picks.
     selection: selection::Selection,
     /// Something shown changed since the last frame.
     dirty: bool,
@@ -146,6 +156,8 @@ impl Stage {
             seq: 0,
             scale: 1.0,
             pointer: None,
+            held: false,
+            hover: None,
             transport: transport::Transport::new(Instant::now()),
             selection: selection::Selection::default(),
             dirty: true,
@@ -184,10 +196,7 @@ impl Stage {
                 self.send(&surface)?;
                 self.target = Some(t);
             }
-            ToStage::Pointer(event) => {
-                self.pointer = event.at().map(|at| (at.x, at.y));
-                self.dirty = true;
-            }
+            ToStage::Pointer(event) => self.on_pointer(event)?,
             ToStage::CancelGesture => {} // no gestures yet
             ToStage::Selection { comp, nodes } => {
                 self.selection = selection::Selection::set(comp, nodes);
@@ -226,29 +235,93 @@ impl Stage {
         Ok(Flow::Continue)
     }
 
+    fn on_pointer(&mut self, event: PointerEvent) -> Result<()> {
+        self.pointer = event.at().map(|at| (at.x, at.y));
+        self.dirty = true;
+        match event {
+            PointerEvent::Down(at) => {
+                self.held = true;
+                self.hover = None;
+                if let Some(picked) = self.pick_on_press(at) {
+                    self.send(&picked)?;
+                }
+            }
+            PointerEvent::Move(at) if !self.held => {
+                self.hover = self.hit(at).and_then(|(_, node)| node);
+            }
+            PointerEvent::Move(_) => {}
+            PointerEvent::Up(at) => {
+                self.held = false;
+                self.hover = self.hit(at).and_then(|(_, node)| node);
+            }
+            PointerEvent::Leave => self.hover = None,
+        }
+        Ok(())
+    }
+
+    /// What's under the pointer: the shown composition, and the node a
+    /// click there picks (Ctrl: the deepest one). `None` with nothing to
+    /// pick from yet (no document or surface).
+    fn hit(&self, at: PointerAt) -> Option<(CompId, Option<NodeId>)> {
+        let project = self.host.project()?;
+        let framing = self.framing(project)?;
+        let shown = Shown::now(project, &self.transport);
+        let picker = pick::Picker::new(&project.compositions[&shown.comp]);
+        let point = framing.view.inverse().transform_point2(Vec2::new(at.x, at.y) * self.scale as f32);
+        // Slop is in logical pixels; the view maps stage units to physical ones.
+        let slop = PICK_SLOP * self.scale as f32 / framing.view.matrix2.x_axis.x;
+        Some((shown.comp, picker.pick(&shown.scene, point, at.modifiers.ctrl, slop)))
+    }
+
+    /// A press picks (ADR 0005): the stage changes its mirror at once and
+    /// returns the `Picked` to report, or `None` if the selection stays.
+    /// - On a node: it becomes the selection, unless already selected (so
+    ///   a drag can move a whole multi-selection). Shift toggles it.
+    /// - On nothing: clears the selection. Shift leaves it alone.
+    fn pick_on_press(&mut self, at: PointerAt) -> Option<ToTools> {
+        let (comp, node) = self.hit(at)?;
+        let current = self.selection.shown(self.host.project()?, comp);
+        let shift = at.modifiers.shift;
+        let (nodes, mode) = match node {
+            Some(n) if shift => (vec![n], PickMode::Toggle),
+            Some(n) if current.contains(&n) => return None,
+            Some(n) => (vec![n], PickMode::Replace),
+            None if shift || current.is_empty() => return None,
+            None => (Vec::new(), PickMode::Replace),
+        };
+        self.selection = selection::Selection::set(comp, mode.apply(&current, &nodes));
+        Some(ToTools::Picked { comp, nodes, mode })
+    }
+
+    /// Where the stage sits in the current surface.
+    fn framing(&self, project: &Project) -> Option<Framing> {
+        let size = self.target.as_ref()?.offscreen.size();
+        let s = &project.settings;
+        let stage = (s.stage_width as f32, s.stage_height as f32);
+        Some(frame_stage(size, stage, self.scale as f32, Presentation::Editor, s.pixel_art))
+    }
+
     /// Draws a frame into the ring and announces it. Nothing to show until
     /// there's both a surface and a document; it stays dirty until then.
     fn draw(&mut self) -> Result<()> {
         let (Some(t), Some(project)) = (self.target.as_mut(), self.host.project()) else { return Ok(()) };
-        // The edited composition (the root unless the editor entered
-        // another one, which is shown on its own, origin at the centre).
-        let comp = self.transport.composition().filter(|c| project.compositions.contains_key(c));
-        let comp = comp.unwrap_or(project.root);
-        let scene = evaluate_from(project, &self.transport.state(), comp, self.transport.now(Instant::now()));
-        let origin = (comp != project.root).then(|| {
-            let s = &project.settings;
-            Vec2::new(s.stage_width as f32, s.stage_height as f32) / 2.0
-        });
-        // Hide and outline: editor-only, so applied here, never in evaluate.
-        let (scene, outlines) = view::editor_view(project, comp, scene, origin.unwrap_or(Vec2::ZERO));
+        let shown = Shown::now(project, &self.transport);
+        let picker = pick::Picker::new(&project.compositions[&shown.comp]);
+        let selected = self.selection.shown(project, shown.comp);
+        let hover = self.hover.filter(|n| !selected.contains(n));
+        let marks = selected.iter().map(|&n| (n, SELECTION)).chain(hover.map(|n| (n, HOVER)));
+        let overlay: Vec<Overlay> = marks
+            .filter_map(|(n, color)| Some(Overlay::Box { rect: picker.bounds(&shown.scene, n)?, color }))
+            .collect();
         let frame = Frame {
             project,
-            scene: &scene,
+            scene: &shown.scene,
             scale: self.scale as f32,
             pointer: self.pointer,
             presentation: Presentation::Editor,
-            outlines: &outlines,
-            origin_marker: origin,
+            outlines: &shown.outlines,
+            origin_marker: shown.origin,
+            overlay: &overlay,
         };
         self.seq += 1;
         let slot = (self.seq % FRAME_SLOTS as u64) as u32;
@@ -256,6 +329,32 @@ impl Stage {
         let ready = ToTools::FrameReady { generation: t.generation, slot, seq: self.seq };
         self.dirty = false;
         self.send(&ready)
+    }
+}
+
+/// The edited composition as the editor shows it right now: the root
+/// unless the editor entered another one, which is shown on its own with
+/// its origin at the stage centre. Hidden nodes are left out.
+struct Shown<'p> {
+    comp: CompId,
+    scene: Scene<'p>,
+    outlines: Vec<Option<Color>>,
+    /// Where the origin was moved to, if it was.
+    origin: Option<Vec2>,
+}
+
+impl<'p> Shown<'p> {
+    fn now(project: &'p Project, transport: &transport::Transport) -> Self {
+        let comp = transport.composition().filter(|c| project.compositions.contains_key(c));
+        let comp = comp.unwrap_or(project.root);
+        let scene = evaluate_from(project, &transport.state(), comp, transport.now(Instant::now()));
+        let origin = (comp != project.root).then(|| {
+            let s = &project.settings;
+            Vec2::new(s.stage_width as f32, s.stage_height as f32) / 2.0
+        });
+        // Hide and outline: editor-only, so applied here, never in evaluate.
+        let (scene, outlines) = view::editor_view(project, comp, scene, origin.unwrap_or(Vec2::ZERO));
+        Self { comp, scene, outlines, origin }
     }
 }
 

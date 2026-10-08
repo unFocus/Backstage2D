@@ -1,6 +1,7 @@
 //! The stage's mirror of the editor's selection (ADR 0005). The editor owns
 //! it and sends it on every change and connect; the stage only reads it,
-//! for drawing selection handles and starting drags (M4).
+//! for drawing selection boxes and starting drags. Picks on the stage
+//! change it first and are reported to the editor, which echoes them.
 
 use backstage_core::{CompId, NodeId, Project};
 
@@ -19,7 +20,6 @@ impl Selection {
     /// The selected nodes to show while `edited` is the shown composition:
     /// none if the selection belongs to another composition, and only
     /// nodes that still exist, in order.
-    #[cfg_attr(not(test), expect(dead_code, reason = "M4's selection handles and drags will read it"))]
     pub fn shown(&self, project: &Project, edited: CompId) -> Vec<NodeId> {
         if self.comp != Some(edited) {
             return Vec::new();

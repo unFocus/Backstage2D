@@ -3,7 +3,20 @@
 //! and again after a stage (re)connects.
 
 use backstage_core::{CompId, NodeId};
-use backstage_protocol::ToStage;
+use backstage_protocol::{PickMode, ToStage};
+
+/// The selection after a pick on the stage (ADR 0005), or `None` if the
+/// pick was made in a composition other than the `edited` one (the editor
+/// moved on before it arrived) and is ignored.
+pub fn apply_pick(
+    current: &[NodeId],
+    edited: CompId,
+    comp: CompId,
+    nodes: &[NodeId],
+    mode: PickMode,
+) -> Option<Vec<NodeId>> {
+    (comp == edited).then(|| mode.apply(current, nodes))
+}
 
 #[derive(Debug, Default)]
 pub struct SelectionSync {
@@ -30,9 +43,21 @@ impl SelectionSync {
 
 #[cfg(test)]
 mod tests {
-    use super::SelectionSync;
+    use super::{SelectionSync, apply_pick};
     use backstage_core::sample::ids::*;
-    use backstage_protocol::ToStage;
+    use backstage_protocol::{PickMode, ToStage};
+
+    #[test]
+    fn picks_apply_only_to_the_edited_composition() {
+        assert_eq!(apply_pick(&[GROUND], STAGE, STAGE, &[EYES], PickMode::Replace), Some(vec![EYES]));
+        assert_eq!(apply_pick(&[GROUND], STAGE, STAGE, &[EYES], PickMode::Toggle), Some(vec![GROUND, EYES]));
+        assert_eq!(apply_pick(&[GROUND], STAGE, STAGE, &[], PickMode::Replace), Some(vec![]));
+        assert_eq!(
+            apply_pick(&[GROUND], STAGE, BALL, &[BALL_BODY], PickMode::Replace),
+            None,
+            "left it since"
+        );
+    }
 
     #[test]
     fn sends_changes_once_and_again_after_a_reset() {

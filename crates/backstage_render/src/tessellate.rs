@@ -83,7 +83,7 @@ pub fn gpu_paint(paint: &Paint) -> GpuPaint {
     gpu
 }
 
-fn lyon_path(cmds: &[PathCmd]) -> Path {
+pub(crate) fn lyon_path(cmds: &[PathCmd]) -> Path {
     let mut builder = Path::builder();
     let mut open = false;
     let p = |v: backstage_core::Vec2| point(v.x, v.y);

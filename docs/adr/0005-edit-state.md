@@ -48,13 +48,31 @@ So neither saving nor exporting needs the stage to own editor state.
   is turned into node IDs by the editor before it's submitted.
 
 ### Picking on the stage (M4)
-Decided now, so M4 only has to build it:
+Decided before M4, and built in its second step (protocol v7):
 1. The stage hit-tests the click or marquee, since it has the geometry.
 2. It applies the result to its mirror **immediately**, so handles appear
    on its next frame with no added latency.
-3. It reports `ToTools::Picked { nodes, mode: Replace | Add | Toggle }`.
+3. It reports `ToTools::Picked { comp, nodes, mode: Replace | Add | Toggle }`.
+   `PickMode::apply` (in the protocol crate) is the one rule both sides
+   use. The editor ignores a pick for a composition it has since left.
 4. The editor applies that to its selection and sends `Selection` back.
    The echo matches what the stage already shows.
+
+What a click picks:
+- **Normally:** the outermost group, meaning the child of the composition
+  root that holds the hit.
+- **Ctrl:** the deepest node.
+- **Inside an instance:** always the instance.
+- **Locked nodes:** skipped, so the click reaches what's under them.
+
+How a press changes the selection:
+- **On a node:** it replaces the selection. If the node is already
+  selected, nothing changes, so a drag can move a whole multi-selection.
+  Shift toggles the node.
+- **On empty space:** the selection is cleared. Shift leaves it alone.
+
+Picks happen on the press, not the release, so a drag starts from the same
+press.
 
 If both sides change the selection at the same time, the editor's
 `Selection` wins, because the editor is the authority. A drag acts on the
@@ -89,11 +107,11 @@ way, `Picked` the other), so moving the authority would stay a local
 change.
 
 ## Consequences
-- **Protocol v5** adds `ToStage::Selection`. `Picked` comes with M4.
+- **Protocol v5** adds `ToStage::Selection`. **v7** adds `ToTools::Picked`.
 - **Editor:** `App.selection` is a `Vec<NodeId>`. `SelectionSync` sends it
   when it changes, and again after a stage connects.
-- **Stage:** `selection::Selection` holds the mirror. Nothing draws it yet;
-  M4's handles will.
+- **Stage:** `selection::Selection` holds the mirror, drawn as selection
+  boxes. Hover is stage state: a lighter box around what a click would pick.
 - The arrangement matches `Transport`. Both are mirrors of edit state, so
   a restarted stage needs nothing beyond `Load`, `Transport`, and
   `Selection`.

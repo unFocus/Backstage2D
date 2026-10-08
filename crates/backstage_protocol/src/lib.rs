@@ -20,7 +20,7 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 /// Bumped on any incompatible change to the messages below.
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// Upper bound on a single control message, to reject garbage early. Big
 /// enough for a project snapshot.
@@ -193,6 +193,47 @@ pub enum ToTools {
         request: u64,
         reason: String,
     },
+    /// Nodes picked on the stage (ADR 0005): the editor applies `mode` to
+    /// its selection, if it still edits `comp`, and sends `Selection` back.
+    /// The stage has already applied it to its mirror.
+    Picked {
+        comp: CompId,
+        nodes: Vec<NodeId>,
+        mode: PickMode,
+    },
+}
+
+/// How a pick changes the selection. Shared by the stage (its mirror) and
+/// the editor (the selection itself) so they can't disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PickMode {
+    /// The picked nodes become the selection.
+    Replace,
+    /// Picked nodes not yet selected are added.
+    Add,
+    /// Selected picked nodes are removed; the others are added.
+    Toggle,
+}
+
+impl PickMode {
+    /// The selection after picking `picked` with `current` selected. Nodes
+    /// added go at the end, so the last one picked becomes the primary.
+    pub fn apply(self, current: &[NodeId], picked: &[NodeId]) -> Vec<NodeId> {
+        let mut out = match self {
+            PickMode::Replace => Vec::new(),
+            PickMode::Add | PickMode::Toggle => current.to_vec(),
+        };
+        for &node in picked {
+            match out.iter().position(|n| *n == node) {
+                Some(i) if self == PickMode::Toggle => {
+                    out.remove(i);
+                }
+                Some(_) => {}
+                None => out.push(node),
+            }
+        }
+        out
+    }
 }
 
 /// Serializes a document value as a one-line RON string (see the crate
@@ -345,6 +386,16 @@ mod tests {
             (any::<u64>(), proptest::option::of(any::<u64>()), any_entry())
                 .prop_map(|(seq, request, entry)| ToTools::Committed { seq, request, entry }),
             (any::<u64>(), ".*").prop_map(|(request, reason)| ToTools::Rejected { request, reason }),
+            (
+                any::<u64>(),
+                proptest::collection::vec(any::<u64>(), 0..4),
+                prop_oneof![Just(PickMode::Replace), Just(PickMode::Add), Just(PickMode::Toggle)]
+            )
+                .prop_map(|(comp, nodes, mode)| ToTools::Picked {
+                    comp: backstage_core::CompId::from_raw(comp),
+                    nodes: nodes.into_iter().map(NodeId::from_raw).collect(),
+                    mode,
+                }),
         ]
     }
 
@@ -391,6 +442,27 @@ mod tests {
         });
         let msg = ToStage::Submit { request: 1, entry };
         assert_eq!(round_trip(&msg), msg);
+    }
+
+    #[test]
+    fn picks_replace_add_and_toggle_with_the_last_picked_primary() {
+        use ids::{EYES, FREE_BALL, GROUND};
+        let current = [GROUND, EYES];
+        assert_eq!(PickMode::Replace.apply(&current, &[FREE_BALL]), [FREE_BALL]);
+        assert_eq!(PickMode::Replace.apply(&current, &[]), []);
+        assert_eq!(
+            PickMode::Add.apply(&current, &[FREE_BALL, GROUND]),
+            [GROUND, EYES, FREE_BALL],
+            "no duplicates"
+        );
+        assert_eq!(PickMode::Add.apply(&current, &[]), current);
+        assert_eq!(PickMode::Toggle.apply(&current, &[GROUND]), [EYES], "selected: out");
+        assert_eq!(
+            PickMode::Toggle.apply(&current, &[FREE_BALL]),
+            [GROUND, EYES, FREE_BALL],
+            "new: in, primary"
+        );
+        assert_eq!(PickMode::Toggle.apply(&[], &[GROUND, GROUND]), [], "twice: in and out again");
     }
 
     #[test]
@@ -488,6 +560,9 @@ mod tests {
             ToTools::Committed { seq: 4, request: Some(7), entry: Entry::Undo },
             ToTools::Committed { seq: 5, request: None, entry: Entry::Redo },
             ToTools::Rejected { request: 8, reason: "no".into() },
+            ToTools::Picked { comp: ids::STAGE, nodes: vec![ids::GROUND], mode: PickMode::Replace },
+            ToTools::Picked { comp: ids::STAGE, nodes: vec![], mode: PickMode::Add },
+            ToTools::Picked { comp: ids::BALL, nodes: vec![ids::BALL_BODY], mode: PickMode::Toggle },
         ] {
             out += &format!("{msg:?} => {}\n", hex(&msg));
         }

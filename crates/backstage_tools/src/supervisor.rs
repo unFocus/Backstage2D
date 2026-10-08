@@ -3,8 +3,10 @@
 //! Each start is a new *session*. Events from older sessions are tagged with
 //! their session number so the UI can ignore them after a restart.
 
-use backstage_core::Entry;
-use backstage_protocol::{FrameRing, PROTOCOL_VERSION, ToStage, ToTools, read_message, write_message};
+use backstage_core::{CompId, Entry, NodeId};
+use backstage_protocol::{
+    FrameRing, PROTOCOL_VERSION, PickMode, ToStage, ToTools, read_message, write_message,
+};
 use gtk::glib;
 use relm4::gtk;
 use std::io;
@@ -48,6 +50,12 @@ pub enum StageEvent {
     Rejected {
         request: u64,
         reason: String,
+    },
+    /// Nodes picked on the stage: see `ToTools::Picked`.
+    Picked {
+        comp: CompId,
+        nodes: Vec<NodeId>,
+        mode: PickMode,
     },
     Exited(String),
 }
@@ -246,6 +254,7 @@ fn run_session(
                 emit(StageEvent::Committed { seq, request, entry: Box::new(entry) })
             }
             ToTools::Rejected { request, reason } => emit(StageEvent::Rejected { request, reason }),
+            ToTools::Picked { comp, nodes, mode } => emit(StageEvent::Picked { comp, nodes, mode }),
         }
     }
 }

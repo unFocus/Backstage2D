@@ -7,6 +7,7 @@
 //! `wgpu::TextureView`. See `docs/rendering.md`.
 
 mod offscreen;
+pub mod pick;
 pub mod tessellate;
 
 pub use offscreen::{Error, FALLBACK_ENV, HeadlessGpu, OFFSCREEN_FORMAT, OffscreenTarget, adapter_options};
@@ -25,6 +26,10 @@ pub const LETTERBOX: wgpu::Color = wgpu::Color::BLACK;
 pub const CROSSHAIR: [f32; 4] = [0.95, 0.15, 0.45, 1.0];
 /// The edited composition's origin (registration point) mark.
 pub const ORIGIN_MARKER: [f32; 4] = [0.15, 0.15, 0.18, 0.9];
+/// Selection boxes on the editor's stage.
+pub const SELECTION: [f32; 4] = [0x2f as f32 / 255.0, 0x7d as f32 / 255.0, 1.0, 1.0];
+/// The box around what a click would pick.
+pub const HOVER: [f32; 4] = [0x2f as f32 / 255.0, 0x7d as f32 / 255.0, 1.0, 0.5];
 /// Multisample count for anti-aliasing.
 pub const SAMPLE_COUNT: u32 = 4;
 /// Gap between the stage and the viewport edge, in logical pixels.
@@ -45,6 +50,16 @@ pub struct Frame<'a> {
     /// The editor's mark for the edited composition's origin, in stage
     /// coordinates, when it isn't the stage's top-left corner.
     pub origin_marker: Option<Vec2>,
+    /// The editor's on-stage marks (selection and hover boxes), drawn over
+    /// the items. Empty for the player.
+    pub overlay: &'a [Overlay],
+}
+
+/// An editor mark drawn over the stage, in screen pixels whatever the zoom.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Overlay {
+    /// A 1 px rectangle outline around `rect` (stage coordinates).
+    Box { rect: pick::Rect, color: [f32; 4] },
 }
 
 /// How the stage is framed in the viewport.
@@ -512,6 +527,11 @@ fn overlay_quads(framing: &Framing, frame: &Frame, background: backstage_core::C
             quads.push(Quad { center: [px, py], half_size, angle: 0.0, color: ORIGIN_MARKER });
         }
     }
+    for overlay in frame.overlay.iter().filter(|_| editor) {
+        match *overlay {
+            Overlay::Box { rect, color } => box_quads(&mut quads, framing, rect, scale, color),
+        }
+    }
     if let Some((px, py)) = frame.pointer.filter(|_| editor) {
         // Snap to pixel centers so 1px lines cover whole pixels (crisp).
         let (px, py) = ((px * scale).floor() + 0.5, (py * scale).floor() + 0.5);
@@ -521,6 +541,25 @@ fn overlay_quads(framing: &Framing, frame: &Frame, background: backstage_core::C
         quads.push(Quad { center: [px, py], half_size: [thick / 2.0, arm], angle: 0.0, color: CROSSHAIR });
     }
     (quads, under)
+}
+
+/// A 1 px (logical) outline around `rect`, its edges on pixel centres so
+/// they stay crisp.
+fn box_quads(quads: &mut Vec<Quad>, framing: &Framing, rect: pick::Rect, scale: f32, color: [f32; 4]) {
+    let a = framing.view.transform_point2(rect.min);
+    let b = framing.view.transform_point2(rect.max);
+    let (x0, y0) = (a.x.min(b.x).floor() + 0.5, a.y.min(b.y).floor() + 0.5);
+    let (x1, y1) = (a.x.max(b.x).floor() + 0.5, a.y.max(b.y).floor() + 0.5);
+    let t = scale.max(1.0) / 2.0;
+    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    let (hw, hh) = ((x1 - x0) / 2.0, (y1 - y0) / 2.0);
+    // Top and bottom span the corners; the sides fit between them.
+    for y in [y0, y1] {
+        quads.push(Quad { center: [cx, y], half_size: [hw + t, t], angle: 0.0, color });
+    }
+    for x in [x0, x1] {
+        quads.push(Quad { center: [x, cy], half_size: [t, (hh - t).max(0.0)], angle: 0.0, color });
+    }
 }
 
 /// A GPU buffer that grows (never shrinks) to fit what's written.

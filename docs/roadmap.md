@@ -59,7 +59,11 @@ The design is recorded in [ADR 0004](adr/0004-commands-and-document-authority.md
 ## Next
 
 ### M4: on-stage editing
-- [ ] Hit testing, selection, bounding boxes, transform handles, all drawn by the engine. Spatial grid snapping.
+- On-stage selection and transforms, all drawn by the engine:
+  - [x] Hit testing on the real paths (fills, and strokes with a few pixels of slop), click selection (outermost group, Ctrl for the deepest node, Shift toggles, locked nodes let clicks through), hover, and selection boxes. The stage applies a pick at once and reports `Picked` (protocol v7, ADR 0005).
+  - [ ] Marquee selection
+  - [ ] Transform handles (scale, rotate)
+  - [ ] Spatial grid snapping
 - [ ] Drag gestures become commands. Undo works across them.
 - [x] Render as soon as input arrives instead of on the fixed tick; idle while paused. Protocol v6 carries pointer presses, releases, and modifiers. The latency probe's median went from 16.6 ms to 0.9 ms (ADR 0002).
 
@@ -75,7 +79,8 @@ The design is recorded in [ADR 0004](adr/0004-commands-and-document-authority.md
 ## Later
 - **Deferred from M3:**
   - Timeline: zoom and scrolling, one row per property, and editing keys
-  - Layers: reordering and grouping by drag (`MoveNode` exists)
+  - Layers: reordering and grouping by drag (`MoveNode` exists), and
+    highlighting every selected row, not just the primary
   - Editing a composition in place, with its parent shown around it, and
     returning to where you were when you leave it
   - Library: renaming compositions, opening assets

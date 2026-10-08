@@ -392,3 +392,160 @@ fn latency_probe() {
         ms(samples[samples.len() - 1]),
     );
 }
+
+/// Where stage point `p` is in a `size` viewport at scale 1, in the
+/// editor's framing: what the tools process would report for it.
+fn stage_to_view(size: (u32, u32), p: backstage_core::Vec2) -> (f32, f32) {
+    let s = sample::bounce().settings;
+    let framing = backstage_render::frame_stage(
+        size,
+        (s.stage_width as f32, s.stage_height as f32),
+        1.0,
+        backstage_render::Presentation::Editor,
+        false,
+    );
+    framing.view.transform_point2(p).into()
+}
+
+/// The centre of everything `node` (a node of the sample's stage) draws at
+/// time zero, in stage coordinates.
+fn centre_of(node: backstage_core::NodeId) -> backstage_core::Vec2 {
+    let project = sample::bounce();
+    let scene = backstage_core::evaluate(&project, &backstage_core::RuntimeState::default(), Time::ZERO);
+    let b = scene
+        .items
+        .iter()
+        .filter(|i| i.node == node || i.instance.first() == Some(&node))
+        .filter_map(backstage_render::pick::item_bounds)
+        .reduce(backstage_render::pick::Rect::union)
+        .unwrap();
+    (b.min + b.max) / 2.0
+}
+
+const VIEW: (u32, u32) = (550, 400);
+
+/// A click (press and release) at stage point `p`.
+fn click(stage: &mut StageHarness, p: backstage_core::Vec2, modifiers: backstage_protocol::Modifiers) {
+    let (x, y) = stage_to_view(VIEW, p);
+    let at = PointerAt { x, y, modifiers };
+    stage.send(&ToStage::Pointer(PointerEvent::Down(at)));
+    stage.send(&ToStage::Pointer(PointerEvent::Up(at)));
+}
+
+/// The `Picked` messages the stage sent before answering a barrier.
+fn picks(stage: &mut StageHarness) -> Vec<ToTools> {
+    stage.send(&ToStage::Submit { request: u64::MAX, entry: Entry::Redo });
+    let mut picked = Vec::new();
+    stage.recv_until(|m| match m {
+        ToTools::Picked { .. } => {
+            picked.push(m.clone());
+            None
+        }
+        ToTools::Rejected { request: u64::MAX, .. } => Some(()),
+        _ => None,
+    });
+    picked
+}
+
+fn picked(nodes: Vec<backstage_core::NodeId>, mode: backstage_protocol::PickMode) -> Vec<ToTools> {
+    vec![ToTools::Picked { comp: ids::STAGE, nodes, mode }]
+}
+
+fn ready_to_click() -> StageHarness {
+    let mut stage = StageHarness::spawn();
+    stage.handshake();
+    stage.load_sample();
+    resize(&mut stage, VIEW.0, VIEW.1);
+    transport(&mut stage, None, 0.0, false);
+    stage
+}
+
+#[test]
+fn clicks_pick_toggle_and_clear_the_selection() {
+    use backstage_protocol::{Modifiers, PickMode};
+    let shift = Modifiers { shift: true, ..Default::default() };
+    let mut stage = ready_to_click();
+    let (ground, ball) = (centre_of(ids::GROUND), centre_of(ids::FREE_BALL));
+
+    click(&mut stage, ground, Modifiers::default());
+    assert_eq!(picks(&mut stage), picked(vec![ids::GROUND], PickMode::Replace));
+    click(&mut stage, ground, Modifiers::default());
+    assert_eq!(picks(&mut stage), [], "already selected: unchanged");
+
+    click(&mut stage, ball, shift);
+    assert_eq!(picks(&mut stage), picked(vec![ids::FREE_BALL], PickMode::Toggle));
+    click(&mut stage, ground, Modifiers::default());
+    assert_eq!(picks(&mut stage), [], "part of a multi-selection: kept for a drag");
+    click(&mut stage, ground, shift);
+    assert_eq!(picks(&mut stage), picked(vec![ids::GROUND], PickMode::Toggle), "toggled out");
+
+    let empty = backstage_core::Vec2::new(10.0, 10.0);
+    click(&mut stage, empty, shift);
+    assert_eq!(picks(&mut stage), [], "Shift on nothing: unchanged");
+    click(&mut stage, empty, Modifiers::default());
+    assert_eq!(picks(&mut stage), picked(vec![], PickMode::Replace), "cleared");
+    click(&mut stage, empty, Modifiers::default());
+    assert_eq!(picks(&mut stage), [], "already empty");
+}
+
+#[test]
+fn locked_nodes_let_clicks_through() {
+    use backstage_protocol::{Modifiers, PickMode};
+    let mut stage = ready_to_click();
+    click(&mut stage, centre_of(ids::FREE_BALL), Modifiers::default());
+    assert_eq!(picks(&mut stage), picked(vec![ids::FREE_BALL], PickMode::Replace));
+
+    let lock = Entry::Do(Command::SetNodeFlags {
+        comp: ids::STAGE,
+        node: ids::GROUND,
+        flags: backstage_core::NodeFlags { locked: true, ..Default::default() },
+    });
+    assert!(matches!(stage.submit(1, lock), ToTools::Committed { .. }));
+    click(&mut stage, centre_of(ids::GROUND), Modifiers::default());
+    assert_eq!(picks(&mut stage), picked(vec![], PickMode::Replace), "nothing under the locked ground");
+}
+
+/// The pixel on the top edge of the box around stage rect `min..max`.
+fn top_edge(min: backstage_core::Vec2, max: backstage_core::Vec2) -> (u32, u32) {
+    let (x0, y0) = stage_to_view(VIEW, min);
+    let (x1, _) = stage_to_view(VIEW, max);
+    (((x0 + x1) / 2.0) as u32, y0.floor() as u32)
+}
+
+#[test]
+fn the_selection_and_hover_get_boxes_without_waiting_for_the_editor() {
+    use backstage_protocol::Modifiers;
+    use backstage_render::{HOVER, SELECTION};
+    let mut stage = ready_to_click();
+    // The ground strip covers stage y 340..400 across the whole stage.
+    let edge = top_edge(backstage_core::Vec2::new(0.0, 340.0), backstage_core::Vec2::new(550.0, 400.0));
+    let ground = centre_of(ids::GROUND);
+
+    // The edge row is the ground's anti-aliased top: half green, half white.
+    let under = stage.next_frame().pixel(edge.0, edge.1).map(|c| c as f32 / 255.0);
+    let (x, y) = stage_to_view(VIEW, ground);
+    stage.send(&ToStage::Pointer(PointerEvent::Move(PointerAt::new(x, y))));
+    let hovered = stage.next_frame().pixel(edge.0, edge.1);
+    assert!(color_close(hovered, mix(HOVER, under)), "hover box over {under:?}: {hovered:?}");
+
+    // The stage shows the pick at once; the editor's echo comes later.
+    click(&mut stage, ground, Modifiers::default());
+    assert!(color_close(stage.next_frame().pixel(edge.0, edge.1), SELECTION));
+
+    stage.send(&ToStage::Selection { comp: ids::STAGE, nodes: vec![] });
+    stage.send(&ToStage::Pointer(PointerEvent::Leave));
+    let plain = stage.next_frame().pixel(edge.0, edge.1);
+    assert!(color_close(plain, under), "no box: {plain:?}");
+}
+
+/// `top` (straight alpha) blended over opaque `under`.
+fn mix(top: [f32; 4], under: [f32; 4]) -> [f32; 4] {
+    let a = top[3];
+    [0, 1, 2]
+        .map(|i| top[i] * a + under[i] * (1.0 - a))
+        .into_iter()
+        .chain([1.0])
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap()
+}

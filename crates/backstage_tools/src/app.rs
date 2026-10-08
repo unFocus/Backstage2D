@@ -6,7 +6,7 @@ use crate::library::{Library, LibraryModel, LibraryMsg, LibraryOutput};
 use crate::path;
 use crate::properties::{self, Properties, PropertiesModel, PropertiesMsg, PropertiesOutput};
 use crate::recovery::{self, Candidate, Recovery};
-use crate::selection::SelectionSync;
+use crate::selection::{self, SelectionSync};
 use crate::smoke::{self, SmokeStep, SmokeTest};
 use crate::stage_view::StageView;
 use crate::supervisor::{StageEvent, Supervisor};
@@ -712,8 +712,8 @@ impl App {
     }
 
     fn select(&mut self, node: Option<NodeId>) {
-        // A panel click replaces the selection; adding to it comes with
-        // multi-select (M4).
+        // A panel click replaces the selection. Adding to it is done on the
+        // stage (Shift+click, see `StageEvent::Picked`).
         self.selection = node.into_iter().collect();
         self.refresh_panels();
     }
@@ -1112,6 +1112,14 @@ impl App {
             StageEvent::Rejected { request, reason } => {
                 eprintln!("stage rejected request {request}: {reason}");
                 self.status = format!("Edit rejected: {reason}");
+            }
+            StageEvent::Picked { comp, nodes, mode } => {
+                let Some(edited) = self.edited() else { return };
+                if let Some(selection) = selection::apply_pick(&self.selection, edited, comp, &nodes, mode) {
+                    // The refresh echoes it back to the stage, which already shows it.
+                    self.selection = selection;
+                    self.refresh_panels();
+                }
             }
             StageEvent::Exited(reason) => {
                 self.stage_ready = false;

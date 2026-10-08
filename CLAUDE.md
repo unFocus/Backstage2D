@@ -50,7 +50,15 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
   transport, the selection, a resize), and every 60 Hz tick while playing.
   A paused, untouched stage sends no frames. Pointer input is
   `ToStage::Pointer(PointerEvent)`: moves, primary-button presses and
-  releases, and modifiers (protocol v6).
+  releases, and modifiers.
+- **Clicking on the stage:**
+  - A click selects the outermost group under the pointer.
+  - Ctrl+click selects the deepest node.
+  - Shift+click toggles a node in or out of the selection.
+  - Clicking empty space clears the selection.
+  - Locked nodes can't be picked.
+  - The stage applies a pick at once and reports `ToTools::Picked`; the
+    editor echoes `Selection` (protocol v7).
 - Double-clicking a composition in the Library, or an
   instance in Layers, edits that composition; the breadcrumb over the
   stage goes back.

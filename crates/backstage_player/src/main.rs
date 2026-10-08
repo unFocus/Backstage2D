@@ -201,6 +201,7 @@ impl App {
             presentation: Presentation::Player,
             outlines: &[],
             origin_marker: None,
+            overlay: &[],
         };
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         let size = (gpu.config.width, gpu.config.height);
