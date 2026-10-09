@@ -1,8 +1,10 @@
 //! Self-driving smoke test for headless UI runs. See `tests/ui_smoke.rs`.
 //!
 //! - `BACKSTAGE_SMOKE=1` runs the editing loop in the real editor, through
-//!   the same paths as the user: wait for frames, scrub the timeline, select
-//!   the first node, nudge, kill the stage once
+//!   the same paths as the user: wait for frames, click on the stage (only
+//!   under `backstage_uidriver`, which gives it real input: click the
+//!   ground, Shift-click a ball, click empty stage), scrub the timeline,
+//!   select the first node, nudge, kill the stage once
 //!   the edit is committed, check the restarted stage replayed it, save, then
 //!   undo and exit 0 without cleaning up, like a crash. That leaves unsaved
 //!   edits (the undo) in the recovery directory.
@@ -13,7 +15,8 @@
 //! The app calls the hooks below and carries out the [`SmokeStep`]s they
 //! return.
 
-use backstage_core::Time;
+use backstage_core::sample::ids::{FREE_BALL, GROUND};
+use backstage_core::{CompId, NodeId, Project, RuntimeState, Time, Vec2, evaluate_from};
 use std::time::Duration;
 
 pub const SMOKE_ENV: &str = "BACKSTAGE_SMOKE";
@@ -22,9 +25,48 @@ pub const SMOKE_TIMEOUT: Duration = Duration::from_secs(20);
 /// so a phase sees just a frame or two; one proves the stage draws.
 const FRAMES_PER_PHASE: u32 = 1;
 
+/// Where a smoke click on the stage lands.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ClickTarget {
+    /// The middle of what this node of the edited composition draws.
+    Node(NodeId),
+    /// A point in stage coordinates.
+    Stage(Vec2),
+}
+
+/// One click on the stage and the selection it should leave.
+struct Pick {
+    what: &'static str,
+    target: ClickTarget,
+    shift: bool,
+    expected: &'static [NodeId],
+}
+
+/// The sample's stage, clicked through the real GUI.
+const PICKS: [Pick; 3] = [
+    Pick { what: "clicked the ground", target: ClickTarget::Node(GROUND), shift: false, expected: &[GROUND] },
+    Pick {
+        what: "shift-clicked the free ball",
+        target: ClickTarget::Node(FREE_BALL),
+        shift: true,
+        expected: &[GROUND, FREE_BALL],
+    },
+    Pick {
+        what: "clicked empty stage",
+        target: ClickTarget::Stage(Vec2::new(10.0, 10.0)),
+        shift: false,
+        expected: &[],
+    },
+];
+
 /// What the app should do next.
 #[derive(Debug, PartialEq)]
 pub enum SmokeStep {
+    /// Click on the stage through the UI driver.
+    StageClick {
+        target: ClickTarget,
+        shift: bool,
+    },
     /// Scrub the timeline to this time.
     Scrub(Time),
     /// Select the first node, as a click on its timeline row does.
@@ -44,6 +86,8 @@ pub enum SmokeStep {
 enum Phase {
     /// Frames from the first stage.
     FirstFrames(u32),
+    /// Clicked `PICKS[i]` on the stage; waiting for the pick.
+    AwaitPick(usize),
     /// Asked to scrub.
     AwaitScrub,
     /// Asked to select.
@@ -82,23 +126,53 @@ pub struct Loaded {
 pub struct SmokeTest {
     first_session: Option<u64>,
     phase: Phase,
+    /// Real input is available (`backstage_uidriver`): click on the stage.
+    stage_clicks: bool,
 }
 
 impl SmokeTest {
-    fn new() -> Self {
-        Self { first_session: None, phase: Phase::FirstFrames(0) }
+    fn new(stage_clicks: bool) -> Self {
+        Self { first_session: None, phase: Phase::FirstFrames(0), stage_clicks }
     }
 
     fn restore() -> Self {
-        Self { first_session: None, phase: Phase::AwaitOffer }
+        Self { first_session: None, phase: Phase::AwaitOffer, stage_clicks: false }
     }
 
-    pub fn from_env() -> Option<Self> {
+    /// The smoke test the environment asks for; `stage_clicks` when the
+    /// editor runs under the UI driver.
+    pub fn from_env(stage_clicks: bool) -> Option<Self> {
         match std::env::var(SMOKE_ENV).ok()?.as_str() {
-            "1" => Some(Self::new()),
+            "1" => Some(Self::new(stage_clicks)),
             "restore" => Some(Self::restore()),
             _ => None,
         }
+    }
+
+    fn click(i: usize) -> SmokeStep {
+        SmokeStep::StageClick { target: PICKS[i].target, shift: PICKS[i].shift }
+    }
+
+    /// A pick on the stage was applied; `selection` is the editor's now.
+    pub fn picked(&mut self, selection: &[NodeId]) -> Option<SmokeStep> {
+        let Phase::AwaitPick(i) = self.phase else {
+            return Some(SmokeStep::Fail(format!("unexpected pick in phase {:?}", self.phase)));
+        };
+        let pick = &PICKS[i];
+        if selection != pick.expected {
+            return Some(SmokeStep::Fail(format!(
+                "{}: selection {selection:?}, expected {:?}",
+                pick.what, pick.expected
+            )));
+        }
+        eprintln!("smoke: {} on stage", pick.what);
+        if i + 1 < PICKS.len() {
+            self.phase = Phase::AwaitPick(i + 1);
+            return Some(Self::click(i + 1));
+        }
+        eprintln!("smoke: stage clicks done, scrubbing");
+        self.phase = Phase::AwaitScrub;
+        Some(SmokeStep::Scrub(Time::from_secs(1)))
     }
 
     /// The editor found unsaved edits from a crashed run.
@@ -119,6 +193,11 @@ impl SmokeTest {
                 *n += 1;
                 if *n < FRAMES_PER_PHASE {
                     return None;
+                }
+                if self.stage_clicks {
+                    eprintln!("smoke: {n} frames from session {session}, clicking on the stage");
+                    self.phase = Phase::AwaitPick(0);
+                    return Some(Self::click(0));
                 }
                 eprintln!("smoke: {n} frames from session {session}, scrubbing");
                 self.phase = Phase::AwaitScrub;
@@ -230,9 +309,67 @@ impl SmokeTest {
     }
 }
 
+/// Where to click for `target` in composition `comp` at `time` (the
+/// default animation, as the editor's stage shows it unpaused), in stage
+/// coordinates: for a node, the middle of the first shape it draws.
+pub fn stage_point(project: &Project, comp: CompId, time: Time, target: ClickTarget) -> Option<Vec2> {
+    let node = match target {
+        ClickTarget::Stage(p) => return Some(p),
+        ClickTarget::Node(node) => node,
+    };
+    let scene = evaluate_from(project, &RuntimeState::default(), comp, time);
+    let item = scene.items.iter().find(|i| i.instance.first().copied().unwrap_or(i.node) == node)?;
+    let backstage_core::DrawContent::Shape(shape) = item.content else { return None };
+    let ends = shape.paths.first()?.path.iter().filter_map(|cmd| match *cmd {
+        backstage_core::PathCmd::MoveTo(p)
+        | backstage_core::PathCmd::LineTo(p)
+        | backstage_core::PathCmd::QuadTo(_, p)
+        | backstage_core::PathCmd::CubicTo(_, _, p) => Some(p),
+        backstage_core::PathCmd::Close => None,
+    });
+    let (min, max) = ends.fold((Vec2::INFINITY, Vec2::NEG_INFINITY), |(lo, hi), p| (lo.min(p), hi.max(p)));
+    min.is_finite().then(|| item.transform.transform_point2((min + max) / 2.0))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{FRAMES_PER_PHASE, Loaded, SmokeStep, SmokeTest, Time};
+    use super::{ClickTarget, FRAMES_PER_PHASE, Loaded, PICKS, SmokeStep, SmokeTest, Time, stage_point};
+    use backstage_core::sample::{self, ids::*};
+    use backstage_core::{NodeId, Vec2};
+
+    #[test]
+    fn stage_clicks_run_before_the_scrub_and_check_each_selection() {
+        let mut smoke = SmokeTest::new(true);
+        let clicks = frames(&mut smoke, 1, FRAMES_PER_PHASE);
+        assert_eq!(clicks, [SmokeStep::StageClick { target: ClickTarget::Node(GROUND), shift: false }]);
+        assert!(matches!(smoke.picked(&[GROUND]), Some(SmokeStep::StageClick { shift: true, .. })));
+        assert!(matches!(
+            smoke.picked(&[GROUND, FREE_BALL]),
+            Some(SmokeStep::StageClick { shift: false, .. })
+        ));
+        assert_eq!(smoke.picked(&[]), Some(SmokeStep::Scrub(Time::from_secs(1))));
+        assert_eq!(smoke.scrubbed(), Some(SmokeStep::Select));
+
+        let mut smoke = SmokeTest::new(true);
+        frames(&mut smoke, 1, FRAMES_PER_PHASE);
+        assert!(matches!(smoke.picked(&[FREE_BALL]), Some(SmokeStep::Fail(_))), "the wrong node");
+        assert!(matches!(SmokeTest::new(true).picked(&[]), Some(SmokeStep::Fail(_))), "before any click");
+    }
+
+    #[test]
+    fn click_targets_land_inside_what_they_name() {
+        let project = sample::bounce();
+        let at = |target| stage_point(&project, STAGE, Time::ZERO, target).unwrap();
+        assert_eq!(at(ClickTarget::Node(GROUND)), Vec2::new(275.0, 370.0), "the strip's middle");
+        assert_eq!(at(ClickTarget::Stage(Vec2::ONE)), Vec2::ONE);
+        // The free ball's body is a circle around the instance's origin.
+        let ball = at(ClickTarget::Node(FREE_BALL));
+        let scene = backstage_core::evaluate(&project, &backstage_core::RuntimeState::default(), Time::ZERO);
+        let body = scene.items.iter().find(|i| i.instance.first() == Some(&FREE_BALL)).unwrap();
+        assert!(ball.distance(body.transform.translation) < 30.0, "{ball} vs {}", body.transform.translation);
+        assert_eq!(stage_point(&project, STAGE, Time::ZERO, ClickTarget::Node(NodeId::from_raw(1))), None);
+        assert!(PICKS.iter().all(|p| stage_point(&project, STAGE, Time::ZERO, p.target).is_some()));
+    }
 
     fn ok(seq: u64) -> Loaded {
         Loaded { seq, matches: true, dirty: false, can_redo: false }
@@ -244,7 +381,7 @@ mod tests {
 
     #[test]
     fn runs_edit_kill_replay_undo_in_order() {
-        let mut smoke = SmokeTest::new();
+        let mut smoke = SmokeTest::new(false);
         assert_eq!(smoke.loaded(1, ok(0)), None);
         assert_eq!(frames(&mut smoke, 1, FRAMES_PER_PHASE), [SmokeStep::Scrub(Time::from_secs(1))]);
         assert_eq!(smoke.scrubbed(), Some(SmokeStep::Select));
@@ -263,10 +400,10 @@ mod tests {
 
     #[test]
     fn a_mismatched_or_empty_replay_fails() {
-        let mut smoke = SmokeTest::new();
+        let mut smoke = SmokeTest::new(false);
         assert!(matches!(smoke.loaded(1, Loaded { matches: false, ..ok(0) }), Some(SmokeStep::Fail(_))));
 
-        let mut smoke = SmokeTest::new();
+        let mut smoke = SmokeTest::new(false);
         frames(&mut smoke, 1, FRAMES_PER_PHASE);
         smoke.scrubbed();
         smoke.selected(true);
@@ -277,7 +414,7 @@ mod tests {
 
     #[test]
     fn unexpected_commits_or_saves_fail() {
-        let mut smoke = SmokeTest::new();
+        let mut smoke = SmokeTest::new(false);
         assert!(matches!(smoke.committed(1), Some(SmokeStep::Fail(_))));
         assert!(matches!(smoke.saved(true), Some(SmokeStep::Fail(_))));
     }
@@ -295,7 +432,7 @@ mod tests {
 
     #[test]
     fn an_offer_outside_restore_mode_fails() {
-        let mut smoke = SmokeTest::new();
+        let mut smoke = SmokeTest::new(false);
         assert!(matches!(smoke.restore_offered(), Some(SmokeStep::Fail(_))));
     }
 }

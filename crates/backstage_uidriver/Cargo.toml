@@ -1,0 +1,15 @@
+[package]
+name = "backstage_uidriver"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+publish.workspace = true
+description = "Test tool: real pointer and keyboard input, and screenshots, in a headless wlroots compositor (cage)"
+
+[dependencies]
+anyhow.workspace = true
+image.workspace = true
+memmap2.workspace = true
+wayland-client.workspace = true
+wayland-protocols-misc.workspace = true
+wayland-protocols-wlr.workspace = true

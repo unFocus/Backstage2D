@@ -90,6 +90,23 @@ fn tools_never_links_gpu_or_vm() {
 }
 
 #[test]
+fn nothing_ships_the_ui_test_driver() {
+    // backstage_uidriver is a test tool: tests start it as a separate binary.
+    let graph = Graph::load();
+    for root in [
+        "backstage_core",
+        "backstage_protocol",
+        "backstage_render",
+        "backstage_script",
+        "backstage_stage",
+        "backstage_player",
+        "backstage_tools",
+    ] {
+        assert_excludes(&graph, root, &["backstage_uidriver", "wayland-protocols-misc"]);
+    }
+}
+
+#[test]
 fn core_is_pure_data() {
     // The document model is shared by every process and must stay headless.
     assert_excludes(&Graph::load(), "backstage_core", &["wgpu", "gtk4", "relm4", "lyon", "winit"]);

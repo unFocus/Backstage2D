@@ -2,8 +2,8 @@
 source: crates/backstage_protocol/src/lib.rs
 expression: out
 ---
-PROTOCOL_VERSION = 7
-Hello { version: 7 } => 0007
+PROTOCOL_VERSION = 8
+Hello { version: 8 } => 0008
 Resize { width: 1920, height: 1080, scale: 1.25 } => 01800fb808000000000000f43f
 Pointer(Move(PointerAt { x: 10.5, y: 20.0, modifiers: Modifiers { shift: false, ctrl: false, alt: false } })) => 0200000028410000a041000000
 Pointer(Down(PointerAt { x: 1.0, y: 2.0, modifiers: Modifiers { shift: true, ctrl: false, alt: true } })) => 02010000803f00000040010001
@@ -16,7 +16,7 @@ Submit { request: 7, entry: Undo } => 060704556e646f
 Transport { composition: Some(comp_0000002x12001), animation: Some(anim_0000001bme800), time: 0.5s, playing: true } => 070112636f6d705f303030303030327831323030310112616e696d5f30303030303031626d6538303004302e357301
 Selection { comp: comp_0000001bme001, nodes: [node_0000001bme401, node_0000001bme404] } => 0812636f6d705f30303030303031626d6530303102126e6f64655f30303030303031626d65343031126e6f64655f30303030303031626d65343034
 Transport { composition: None, animation: None, time: 0s, playing: false } => 07000002307300
-Hello { version: 7, pid: 4242, adapter: "gpu" } => 0007922103677075
+Hello { version: 8, pid: 4242, adapter: "gpu" } => 0008922103677075
 Surface { generation: 2, path: "/run/x", width: 640, height: 480, stride: 2560 } => 0102062f72756e2f788005e0038014
 FrameReady { generation: 2, slot: 1, seq: 300 } => 020201ac02
 Log("hi") => 03026869
@@ -28,3 +28,4 @@ Rejected { request: 8, reason: "no" } => 0708026e6f
 Picked { comp: comp_0000001bme001, nodes: [node_0000001bme401], mode: Replace } => 0812636f6d705f30303030303031626d6530303101126e6f64655f30303030303031626d6534303100
 Picked { comp: comp_0000001bme001, nodes: [], mode: Add } => 0812636f6d705f30303030303031626d653030310001
 Picked { comp: comp_0000002x12001, nodes: [node_0000002x12401], mode: Toggle } => 0812636f6d705f3030303030303278313230303101126e6f64655f3030303030303278313234303102
+Framing { origin: (24.0, 31.5), scale: 0.88 } => 090000c0410000fc41ae47613f

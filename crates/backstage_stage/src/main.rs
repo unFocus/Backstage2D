@@ -141,6 +141,8 @@ struct Stage {
     selection: selection::Selection,
     /// Something shown changed since the last frame.
     dirty: bool,
+    /// The last `ToTools::Framing` sent, to send it again only on a change.
+    framing_sent: Option<ToTools>,
 }
 
 impl Stage {
@@ -161,6 +163,7 @@ impl Stage {
             transport: transport::Transport::new(Instant::now()),
             selection: selection::Selection::default(),
             dirty: true,
+            framing_sent: None,
         }
     }
 
@@ -304,6 +307,18 @@ impl Stage {
     /// Draws a frame into the ring and announces it. Nothing to show until
     /// there's both a surface and a document; it stays dirty until then.
     fn draw(&mut self) -> Result<()> {
+        // Tell the editor where the stage is first, if that changed, so it
+        // can map what this frame shows.
+        if let Some(framing) = self.host.project().and_then(|p| self.framing(p)) {
+            let s = self.scale as f32;
+            let origin = framing.view.translation / s;
+            let msg =
+                ToTools::Framing { origin: (origin.x, origin.y), scale: framing.view.matrix2.x_axis.x / s };
+            if self.framing_sent.as_ref() != Some(&msg) {
+                self.send(&msg)?;
+                self.framing_sent = Some(msg);
+            }
+        }
         let (Some(t), Some(project)) = (self.target.as_mut(), self.host.project()) else { return Ok(()) };
         let shown = Shown::now(project, &self.transport);
         let picker = pick::Picker::new(&project.compositions[&shown.comp]);

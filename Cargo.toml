@@ -32,6 +32,10 @@ winit = { version = "0.30.13", default-features = false, features = ["wayland", 
 
 # Test-only.
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+# The UI test driver (backstage_uidriver): virtual input and screenshots.
+wayland-client = "0.31.15"
+wayland-protocols-misc = { version = "0.3.12", features = ["client"] }
+wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
 insta = "1.48.0"
 proptest = "1.11.0"
 serde_json = "1.0.151"

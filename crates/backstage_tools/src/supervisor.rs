@@ -51,6 +51,11 @@ pub enum StageEvent {
         request: u64,
         reason: String,
     },
+    /// Where the stage sits in the stage section: see `ToTools::Framing`.
+    Framing {
+        origin: (f32, f32),
+        scale: f32,
+    },
     /// Nodes picked on the stage: see `ToTools::Picked`.
     Picked {
         comp: CompId,
@@ -255,6 +260,7 @@ fn run_session(
             }
             ToTools::Rejected { request, reason } => emit(StageEvent::Rejected { request, reason }),
             ToTools::Picked { comp, nodes, mode } => emit(StageEvent::Picked { comp, nodes, mode }),
+            ToTools::Framing { origin, scale } => emit(StageEvent::Framing { origin, scale }),
         }
     }
 }

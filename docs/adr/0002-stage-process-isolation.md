@@ -73,7 +73,10 @@ current document, as Flash did. A runaway script can only kill the player.
   playhead (`Transport`) and the selection (`Selection`), sent on change
   and on connect.
 - **Report** (stage → tools, M4): on-stage picks (`Picked`), which the
-  tools process makes the selection.
+  tools process makes the selection. Where the stage sits in the stage
+  section (`Framing`, in logical pixels), so the tools process can map
+  stage coordinates to the screen. The UI smoke test clicks with it, and
+  rulers will need it.
 - **Mutate:** submit a command, set the active tool and its parameters.
 - **Frames:** rendered stage output, when the stage is shown inside the
   tools window (see below).

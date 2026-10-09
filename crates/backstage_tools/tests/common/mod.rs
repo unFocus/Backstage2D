@@ -11,15 +11,26 @@ use std::sync::Once;
 /// binary, and a stale stage speaking an older protocol just crash-loops.
 pub fn stage_binary() -> PathBuf {
     static BUILD: Once = Once::new();
-    // target/<profile>/deps/<test-binary> → target/<profile>/backstage_stage
+    built("backstage_stage", &BUILD)
+}
+
+/// `backstage_uidriver` (real input and screenshots in headless cage),
+/// built the same way.
+pub fn uidriver_binary() -> PathBuf {
+    static BUILD: Once = Once::new();
+    built("backstage_uidriver", &BUILD)
+}
+
+fn built(package: &str, once: &Once) -> PathBuf {
+    // target/<profile>/deps/<test-binary> → target/<profile>/<package>
     let exe = std::env::current_exe().unwrap();
-    let path = exe.parent().unwrap().parent().unwrap().join("backstage_stage");
-    BUILD.call_once(|| {
+    let path = exe.parent().unwrap().parent().unwrap().join(package);
+    once.call_once(|| {
         let status = std::process::Command::new(env!("CARGO"))
-            .args(["build", "-p", "backstage_stage"])
+            .args(["build", "-p", package])
             .status()
             .expect("running cargo build");
-        assert!(status.success(), "building backstage_stage failed");
+        assert!(status.success(), "building {package} failed");
     });
     assert!(path.exists(), "{} missing", path.display());
     path

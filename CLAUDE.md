@@ -58,7 +58,9 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
   - Clicking empty space clears the selection.
   - Locked nodes can't be picked.
   - The stage applies a pick at once and reports `ToTools::Picked`; the
-    editor echoes `Selection` (protocol v7).
+    editor echoes `Selection`.
+- The stage reports where it sits in the stage section with
+  `ToTools::Framing` (logical pixels, protocol v8).
 - Double-clicking a composition in the Library, or an
   instance in Layers, edits that composition; the breadcrumb over the
   stage goes back.
@@ -69,6 +71,8 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
   crate. It talks to the stage only through `backstage_protocol`.
 - Runtime crates (core, protocol, render, script, stage, player) never
   depend on the tools crate, GTK, or Relm4.
+- Nothing depends on `backstage_uidriver`, the test-only input and
+  screenshot tool. Tests start it as a binary.
 - The renderer draws `evaluate`'s `Scene`. It never samples animations
   itself.
 - Platforms are Wayland, macOS, and Windows 11. No X11 (winit is built
@@ -133,8 +137,14 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
 - **Commits go to `main`** (solo project) with a descriptive message, then
   get pushed. CI (`.github/workflows/ci.yml`, Fedora 44 container) runs
   `scripts/check.sh`. Watch it with `gh run watch`.
+- **To check interactive states (hover, clicks, drags), use a headless
+  session:** `cage -- backstage_uidriver --script s.txt -- backstage_tools`.
+  The script can move, click (with modifiers), press keys, and take
+  screenshots, which you then read. See "Headless sessions" in
+  `docs/testing.md`. It never touches the user's desktop.
 - **When checking the GUI on the desktop,** run it with `setsid`,
   screenshot with `spectacle -b -n -a -o <file>`, and clean up afterwards.
+  You can't click there.
 - **Headless UI runs** use `cage` with `WLR_BACKENDS=headless`.
 
 ## Gotchas

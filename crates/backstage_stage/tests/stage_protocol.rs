@@ -549,3 +549,47 @@ fn mix(top: [f32; 4], under: [f32; 4]) -> [f32; 4] {
         .try_into()
         .unwrap()
 }
+
+/// The `Framing` the stage reports next.
+fn framing(stage: &mut StageHarness) -> ((f32, f32), f32) {
+    stage.recv_until(|m| match m {
+        ToTools::Framing { origin, scale } => Some((*origin, *scale)),
+        _ => None,
+    })
+}
+
+#[test]
+fn the_stage_reports_where_it_sits_in_logical_pixels() {
+    let mut stage = StageHarness::spawn();
+    stage.handshake();
+    stage.load_sample();
+    resize(&mut stage, VIEW.0, VIEW.1);
+    let (origin, scale) = framing(&mut stage);
+    let (x, y) = stage_to_view(VIEW, backstage_core::Vec2::ZERO);
+    assert_eq!(origin, (x, y), "the stage's top-left corner");
+    let (x1, _) = stage_to_view(VIEW, backstage_core::Vec2::new(550.0, 0.0));
+    assert!((scale - (x1 - x) / 550.0).abs() < 1e-5, "{scale}");
+
+    // The same section at scale 2: twice the pixels, the same logical
+    // layout, so nothing new to report before its first frame.
+    stage.send(&ToStage::Resize { width: VIEW.0 * 2, height: VIEW.1 * 2, scale: 2.0 });
+    let generation = stage.recv_until(|m| match m {
+        ToTools::Surface { generation, .. } => Some(*generation),
+        _ => None,
+    });
+    let mut reported = Vec::new();
+    stage.recv_until(|m| match m {
+        ToTools::Framing { .. } => {
+            reported.push(m.clone());
+            None
+        }
+        ToTools::FrameReady { generation: g, .. } if *g == generation => Some(()),
+        _ => None,
+    });
+    assert_eq!(reported, [], "unchanged");
+
+    // A new stage size moves it.
+    let settings = ProjectSettings { stage_width: 275, ..sample::bounce().settings };
+    assert!(matches!(stage.submit(1, Entry::Do(Command::SetSettings(settings))), ToTools::Committed { .. }));
+    assert_ne!(framing(&mut stage), (origin, scale));
+}

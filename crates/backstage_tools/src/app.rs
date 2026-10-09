@@ -12,6 +12,7 @@ use crate::stage_view::StageView;
 use crate::supervisor::{StageEvent, Supervisor};
 use crate::timeline::{Playhead, Timeline, TimelineModel, TimelineMsg, TimelineOutput, pick_animation};
 use crate::tree;
+use crate::ui_driver::UiDriver;
 use crate::working_copy::{self, CommitError, SaveToError, WorkingCopy};
 use backstage_core::{
     Animation, Command, CompId, EditorPrefs, Entry, NodeId, NodeKind, Project, Time, TimeGrid,
@@ -43,6 +44,9 @@ fn pointer_at(state: gdk::ModifierType, x: f64, y: f64) -> PointerAt {
     PointerAt { x: x as f32, y: y as f32, modifiers }
 }
 
+/// Under the UI driver, the smoke test saves screenshots in this directory.
+pub const SHOTS_ENV: &str = "BACKSTAGE_UI_SHOTS";
+
 /// Project directory to open at startup; unset means the built-in sample.
 pub const PROJECT_ENV: &str = "BACKSTAGE_PROJECT";
 
@@ -71,6 +75,13 @@ pub struct App {
     stage_view: StageView,
     health: StageHealth,
     smoke: Option<SmokeTest>,
+    /// Real input for the smoke test, when run under `backstage_uidriver`.
+    ui_driver: Option<UiDriver>,
+    /// Smoke screenshots go here (`BACKSTAGE_UI_SHOTS`), numbered.
+    shots: Option<(PathBuf, u32)>,
+    /// Where the stage sits in the stage section: stage point `p` is at
+    /// `origin + p × scale` logical pixels (`ToTools::Framing`).
+    stage_framing: Option<((f32, f32), f32)>,
     timeline: Controller<Timeline>,
     /// The edited composition's animation and clock; the stage mirrors it.
     playhead: Playhead,
@@ -126,6 +137,9 @@ pub enum AppMsg {
     Library(LibraryOutput),
     /// Escape: select nothing.
     Deselect,
+    /// Smoke test: take a screenshot (the window has redrawn by now), then
+    /// carry out the step.
+    SmokeShot(&'static str, Option<SmokeStep>),
     /// Edit this composition, entered from the current one.
     Enter(CompId),
     /// Go back to this depth of the breadcrumb (0 is the root).
@@ -315,6 +329,14 @@ impl SimpleComponent for App {
             Err(e) => (None, Some(e)),
         };
         let may_close = Rc::new(Cell::new(false));
+        let ui_driver = match UiDriver::from_env() {
+            Some(Ok(driver)) => Some(driver),
+            Some(Err(e)) => {
+                eprintln!("{e}");
+                None
+            }
+            None => None,
+        };
         let mut model = App {
             window: root.clone(),
             may_close: may_close.clone(),
@@ -334,7 +356,10 @@ impl SimpleComponent for App {
             crumbs: gtk::Box::new(gtk::Orientation::Horizontal, 2),
             input: sender.input_sender().clone(),
             health: StageHealth::new(Instant::now()),
-            smoke: SmokeTest::from_env(),
+            smoke: SmokeTest::from_env(ui_driver.is_some()),
+            ui_driver,
+            shots: std::env::var_os(SHOTS_ENV).map(|dir| (PathBuf::from(dir), 0)),
+            stage_framing: None,
             status: "Stage starting…".into(),
             banner: None,
             frames_this_second: 0,
@@ -426,6 +451,10 @@ impl SimpleComponent for App {
             AppMsg::Layers(out) => self.on_layers(out),
             AppMsg::Library(out) => self.on_library(out),
             AppMsg::Deselect => self.select(None),
+            AppMsg::SmokeShot(name, step) => {
+                self.smoke_shot(name);
+                self.run_smoke_step(step, &sender);
+            }
             AppMsg::Enter(comp) => {
                 let path = path::enter(&self.path, comp);
                 self.edit_path(path);
@@ -953,6 +982,12 @@ impl App {
     fn run_smoke_step(&mut self, step: Option<SmokeStep>, sender: &ComponentSender<Self>) {
         match step {
             None => {}
+            Some(SmokeStep::StageClick { target, shift }) => {
+                let result = self.smoke_click(target, shift);
+                if let Err(why) = result {
+                    self.run_smoke_step(Some(SmokeStep::Fail(why)), sender);
+                }
+            }
             Some(SmokeStep::Nudge) => self.update_nudge(10.0, 0.0),
             Some(SmokeStep::Scrub(t)) => {
                 // The same path as dragging on the timeline.
@@ -1005,6 +1040,40 @@ impl App {
                 eprintln!("smoke: failed: {why}");
                 std::process::exit(1);
             }
+        }
+    }
+
+    /// Clicks on the stage with real input, through the UI driver: `target`
+    /// mapped through the stage's framing into the stage section, and the
+    /// section into the window (which fills the headless output).
+    fn smoke_click(&mut self, target: smoke::ClickTarget, shift: bool) -> Result<(), String> {
+        let (Some(copy), Some(((ox, oy), scale)), Some(comp)) =
+            (&self.copy, self.stage_framing, self.edited())
+        else {
+            return Err("no document or stage framing to click on".into());
+        };
+        let time = self.playhead.clock(Instant::now());
+        let p = smoke::stage_point(copy.document().project(), comp, time, target)
+            .ok_or_else(|| format!("nothing to click for {target:?}"))?;
+        let native = self.stage_view.native().ok_or("the stage section isn't shown")?;
+        let section = self
+            .stage_view
+            .compute_point(&native, &gtk::graphene::Point::zero())
+            .ok_or("the stage section has no position")?;
+        let (sx, sy) = native.surface_transform();
+        let x = sx + section.x() as f64 + (ox + p.x * scale) as f64;
+        let y = sy + section.y() as f64 + (oy + p.y * scale) as f64;
+        let driver = self.ui_driver.as_mut().ok_or("no UI driver")?;
+        driver.send(&format!("click {x:.1} {y:.1}{}", if shift { " shift" } else { "" }))
+    }
+
+    /// Saves a numbered screenshot, if the smoke test was asked for them.
+    fn smoke_shot(&mut self, name: &str) {
+        let (Some(driver), Some((dir, n))) = (self.ui_driver.as_mut(), self.shots.as_mut()) else { return };
+        *n += 1;
+        let path = dir.join(format!("{n:02}-{name}.png"));
+        if let Err(e) = driver.send(&format!("shot {}", path.display())) {
+            eprintln!("smoke: {e}");
         }
     }
 
@@ -1120,7 +1189,20 @@ impl App {
                     self.selection = selection;
                     self.refresh_panels();
                 }
+                if self.smoke.is_some() {
+                    let step = self.smoke.as_mut().and_then(|s| s.picked(&self.selection));
+                    if self.shots.is_some() {
+                        // Give the stage and GTK time to show the pick first.
+                        let input = self.input.clone();
+                        glib::timeout_add_local_once(Duration::from_millis(200), move || {
+                            input.emit(AppMsg::SmokeShot("pick", step));
+                        });
+                    } else {
+                        self.run_smoke_step(step, sender);
+                    }
+                }
             }
+            StageEvent::Framing { origin, scale } => self.stage_framing = Some((origin, scale)),
             StageEvent::Exited(reason) => {
                 self.stage_ready = false;
                 self.supervisor.reap();

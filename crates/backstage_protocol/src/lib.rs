@@ -20,7 +20,7 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 /// Bumped on any incompatible change to the messages below.
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 /// Upper bound on a single control message, to reject garbage early. Big
 /// enough for a project snapshot.
@@ -200,6 +200,14 @@ pub enum ToTools {
         comp: CompId,
         nodes: Vec<NodeId>,
         mode: PickMode,
+    },
+    /// Where the stage sits in the stage section: stage point `p` is at
+    /// `origin + p × scale` in logical pixels of the section. Sent before
+    /// the first frame and whenever it changes (a resize, a new document,
+    /// a new stage size).
+    Framing {
+        origin: (f32, f32),
+        scale: f32,
     },
 }
 
@@ -396,6 +404,8 @@ mod tests {
                     nodes: nodes.into_iter().map(NodeId::from_raw).collect(),
                     mode,
                 }),
+            (-1e6f32..1e6, -1e6f32..1e6, 0.0f32..100.0)
+                .prop_map(|(x, y, scale)| ToTools::Framing { origin: (x, y), scale }),
         ]
     }
 
@@ -563,6 +573,7 @@ mod tests {
             ToTools::Picked { comp: ids::STAGE, nodes: vec![ids::GROUND], mode: PickMode::Replace },
             ToTools::Picked { comp: ids::STAGE, nodes: vec![], mode: PickMode::Add },
             ToTools::Picked { comp: ids::BALL, nodes: vec![ids::BALL_BODY], mode: PickMode::Toggle },
+            ToTools::Framing { origin: (24.0, 31.5), scale: 0.88 },
         ] {
             out += &format!("{msg:?} => {}\n", hex(&msg));
         }

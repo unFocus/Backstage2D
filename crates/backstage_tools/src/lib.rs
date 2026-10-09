@@ -17,4 +17,5 @@ pub mod stage_view;
 pub mod supervisor;
 pub mod timeline;
 pub mod tree;
+pub mod ui_driver;
 pub mod working_copy;
