@@ -33,6 +33,11 @@ impl Rect {
         Rect { min: self.min.min(other.min), max: self.max.max(other.max) }
     }
 
+    /// Whether the two overlap or touch.
+    pub fn intersects(self, other: Rect) -> bool {
+        self.min.cmple(other.max).all() && other.min.cmple(self.max).all()
+    }
+
     fn corners(self) -> [Vec2; 4] {
         [self.min, Vec2::new(self.max.x, self.min.y), self.max, Vec2::new(self.min.x, self.max.y)]
     }
@@ -183,6 +188,18 @@ mod tests {
         assert!(b.min.abs_diff_eq(Vec2::splat(-11.0), 1e-3), "{b:?}");
         assert!(b.max.abs_diff_eq(Vec2::splat(11.0), 1e-3), "{b:?}");
         assert_eq!(item_bounds(&item(&Shape::default(), Affine2::IDENTITY)), None, "empty");
+    }
+
+    #[test]
+    fn rects_intersect_when_they_overlap_or_touch() {
+        let r = |x0, y0, x1, y1| Rect { min: Vec2::new(x0, y0), max: Vec2::new(x1, y1) };
+        let a = r(0.0, 0.0, 10.0, 10.0);
+        assert!(a.intersects(r(5.0, 5.0, 20.0, 20.0)));
+        assert!(a.intersects(r(2.0, 2.0, 3.0, 3.0)), "inside");
+        assert!(r(2.0, 2.0, 3.0, 3.0).intersects(a), "around");
+        assert!(a.intersects(r(10.0, 0.0, 20.0, 10.0)), "touching");
+        assert!(!a.intersects(r(11.0, 0.0, 20.0, 10.0)), "beside");
+        assert!(!a.intersects(r(0.0, 11.0, 10.0, 20.0)), "below");
     }
 
     #[test]

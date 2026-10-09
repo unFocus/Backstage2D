@@ -982,8 +982,8 @@ impl App {
     fn run_smoke_step(&mut self, step: Option<SmokeStep>, sender: &ComponentSender<Self>) {
         match step {
             None => {}
-            Some(SmokeStep::StageClick { target, shift }) => {
-                let result = self.smoke_click(target, shift);
+            Some(SmokeStep::StageInput { target, drag_to, shift }) => {
+                let result = self.smoke_input(target, drag_to, shift);
                 if let Err(why) = result {
                     self.run_smoke_step(Some(SmokeStep::Fail(why)), sender);
                 }
@@ -1043,10 +1043,46 @@ impl App {
         }
     }
 
-    /// Clicks on the stage with real input, through the UI driver: `target`
-    /// mapped through the stage's framing into the stage section, and the
-    /// section into the window (which fills the headless output).
-    fn smoke_click(&mut self, target: smoke::ClickTarget, shift: bool) -> Result<(), String> {
+    /// Clicks on the stage with real input, through the UI driver, or drags
+    /// from `target` to `drag_to`. Stage points are mapped through the
+    /// stage's framing into the stage section, and the section into the
+    /// window (which fills the headless output).
+    fn smoke_input(
+        &mut self,
+        target: smoke::ClickTarget,
+        drag_to: Option<smoke::ClickTarget>,
+        shift: bool,
+    ) -> Result<(), String> {
+        let from = self.smoke_screen_point(target)?;
+        let to = drag_to.map(|t| self.smoke_screen_point(t)).transpose()?;
+        let driver = self.ui_driver.as_mut().ok_or("no UI driver")?;
+        let Some(to) = to else {
+            return driver.send(&format!(
+                "click {:.1} {:.1}{}",
+                from.0,
+                from.1,
+                if shift { " shift" } else { "" }
+            ));
+        };
+        if shift {
+            driver.send("key shift down")?;
+        }
+        driver.send(&format!("move {:.1} {:.1}", from.0, from.1))?;
+        driver.send("down")?;
+        // GTK's drag gesture needs motion between the press and release.
+        for t in [0.1, 0.5, 0.9, 1.0] {
+            let (x, y) = (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
+            driver.send(&format!("move {x:.1} {y:.1}"))?;
+        }
+        driver.send("up")?;
+        if shift {
+            driver.send("key shift up")?;
+        }
+        Ok(())
+    }
+
+    /// Where `target` is on the screen.
+    fn smoke_screen_point(&self, target: smoke::ClickTarget) -> Result<(f64, f64), String> {
         let (Some(copy), Some(((ox, oy), scale)), Some(comp)) =
             (&self.copy, self.stage_framing, self.edited())
         else {
@@ -1061,10 +1097,10 @@ impl App {
             .compute_point(&native, &gtk::graphene::Point::zero())
             .ok_or("the stage section has no position")?;
         let (sx, sy) = native.surface_transform();
-        let x = sx + section.x() as f64 + (ox + p.x * scale) as f64;
-        let y = sy + section.y() as f64 + (oy + p.y * scale) as f64;
-        let driver = self.ui_driver.as_mut().ok_or("no UI driver")?;
-        driver.send(&format!("click {x:.1} {y:.1}{}", if shift { " shift" } else { "" }))
+        Ok((
+            sx + section.x() as f64 + (ox + p.x * scale) as f64,
+            sy + section.y() as f64 + (oy + p.y * scale) as f64,
+        ))
     }
 
     /// Saves a numbered screenshot, if the smoke test was asked for them.

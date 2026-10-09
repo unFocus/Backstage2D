@@ -3,7 +3,7 @@
 //! (`BACKSTAGE_SMOKE=1`, see `src/smoke.rs`) under `backstage_uidriver`,
 //! which gives it real pointer and keyboard input: it waits for stage
 //! frames, clicks on the stage (the ground, Shift and a ball, empty stage)
-//! and checks each selection, nudges, kills the stage once the edit is committed, checks the restarted
+//! and drags a marquee, checking each selection, nudges, kills the stage once the edit is committed, checks the restarted
 //! stage replayed it into the same document, saves (to a temporary copy of
 //! the sample project), undoes the edit on the new stage, and exits 0
 //! without cleaning up, like a crash. A second run in restore mode
@@ -72,7 +72,12 @@ fn edits_survive_stage_and_editor_crashes_in_the_real_editor() {
     assert!(passed, "smoke test failed:\n{log}");
     assert!(log.contains("passed"), "no pass marker:\n{log}");
     assert!(log.contains("smoke: stage replayed 1 entry and matches the editor"), "no replay:\n{log}");
-    for click in ["clicked the ground", "shift-clicked the free ball", "clicked empty stage"] {
+    for click in [
+        "clicked the ground",
+        "shift-clicked the free ball",
+        "clicked empty stage",
+        "marquee-selected the eyes and both balls",
+    ] {
         assert!(log.contains(&format!("smoke: {click} on stage")), "no {click:?}:\n{log}");
     }
     assert!(log.contains("smoke: entered a composition and came back, nudging"), "no enter:\n{log}");

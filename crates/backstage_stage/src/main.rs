@@ -18,9 +18,10 @@ use backstage_protocol::{
     FRAME_SLOTS, FrameRing, PROTOCOL_VERSION, PickMode, PointerAt, PointerEvent, ToStage, ToTools,
     read_message, write_message,
 };
+use backstage_render::pick::Rect;
 use backstage_render::{
-    Frame, Framing, HOVER, HeadlessGpu, OFFSCREEN_FORMAT, OffscreenTarget, Overlay, Presentation, Renderer,
-    SELECTION, frame_stage,
+    Frame, Framing, HOVER, HeadlessGpu, MARQUEE, OFFSCREEN_FORMAT, OffscreenTarget, Overlay, Presentation,
+    Renderer, SELECTION, frame_stage,
 };
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -31,6 +32,12 @@ const FRAME_INTERVAL: Duration = Duration::from_nanos(1_000_000_000 / 60);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 /// How far off a stroke a click still hits it, in logical pixels.
 const PICK_SLOP: f32 = 3.0;
+/// How far the pointer moves, in logical pixels, before a press on empty
+/// space becomes a marquee rather than a click.
+const DRAG_THRESHOLD: f32 = 3.0;
+/// Selection and hover boxes sit this far outside the bounds, in logical
+/// pixels, so they stay visible on edges shared with the stage.
+const BOX_OUTSET: f32 = 2.0;
 
 fn main() -> Result<()> {
     match run() {
@@ -136,6 +143,8 @@ struct Stage {
     held: bool,
     /// The node a click would pick right now (stage state, ADR 0005).
     hover: Option<NodeId>,
+    /// The press-drag-release in progress, if any (stage state).
+    gesture: Option<Gesture>,
     transport: transport::Transport,
     /// The editor's selection (ADR 0005), changed here first by picks.
     selection: selection::Selection,
@@ -160,6 +169,7 @@ impl Stage {
             pointer: None,
             held: false,
             hover: None,
+            gesture: None,
             transport: transport::Transport::new(Instant::now()),
             selection: selection::Selection::default(),
             dirty: true,
@@ -200,7 +210,10 @@ impl Stage {
                 self.target = Some(t);
             }
             ToStage::Pointer(event) => self.on_pointer(event)?,
-            ToStage::CancelGesture => {} // no gestures yet
+            ToStage::CancelGesture => {
+                self.gesture = None;
+                self.dirty = true;
+            }
             ToStage::Selection { comp, nodes } => {
                 self.selection = selection::Selection::set(comp, nodes);
                 self.dirty = true;
@@ -245,35 +258,61 @@ impl Stage {
             PointerEvent::Down(at) => {
                 self.held = true;
                 self.hover = None;
-                if let Some(picked) = self.pick_on_press(at) {
+                let Some(hit) = self.hit(at) else { return Ok(()) };
+                if let Some(picked) = self.pick_on_press(&hit, at.modifiers.shift) {
                     self.send(&picked)?;
+                }
+                if hit.node.is_none() {
+                    self.gesture = Some(Gesture::Marquee {
+                        comp: hit.comp,
+                        from: hit.point,
+                        to: hit.point,
+                        shift: at.modifiers.shift,
+                        deep: at.modifiers.ctrl,
+                        live: false,
+                    });
                 }
             }
             PointerEvent::Move(at) if !self.held => {
-                self.hover = self.hit(at).and_then(|(_, node)| node);
+                self.hover = self.hit(at).and_then(|hit| hit.node);
             }
-            PointerEvent::Move(_) => {}
+            PointerEvent::Move(at) => {
+                let Some(hit) = self.hit(at) else { return Ok(()) };
+                if let Some(Gesture::Marquee { from, to, deep, live, .. }) = &mut self.gesture {
+                    *to = hit.point;
+                    *deep = at.modifiers.ctrl;
+                    *live |= from.distance(*to) >= DRAG_THRESHOLD * hit.per_pixel;
+                }
+            }
             PointerEvent::Up(at) => {
                 self.held = false;
-                self.hover = self.hit(at).and_then(|(_, node)| node);
+                if let Some(Gesture::Marquee { comp, from, to, shift, deep, live: true }) =
+                    self.gesture.take()
+                    && let Some(picked) =
+                        self.pick_marquee(comp, Rect::around([from, to]).unwrap(), shift, deep)
+                {
+                    self.send(&picked)?;
+                }
+                self.gesture = None;
+                self.hover = self.hit(at).and_then(|hit| hit.node);
             }
             PointerEvent::Leave => self.hover = None,
         }
         Ok(())
     }
 
-    /// What's under the pointer: the shown composition, and the node a
-    /// click there picks (Ctrl: the deepest one). `None` with nothing to
-    /// pick from yet (no document or surface).
-    fn hit(&self, at: PointerAt) -> Option<(CompId, Option<NodeId>)> {
+    /// What's under the pointer, or `None` with nothing to pick from yet
+    /// (no document or surface).
+    fn hit(&self, at: PointerAt) -> Option<Hit> {
         let project = self.host.project()?;
         let framing = self.framing(project)?;
         let shown = Shown::now(project, &self.transport);
         let picker = pick::Picker::new(&project.compositions[&shown.comp]);
         let point = framing.view.inverse().transform_point2(Vec2::new(at.x, at.y) * self.scale as f32);
-        // Slop is in logical pixels; the view maps stage units to physical ones.
-        let slop = PICK_SLOP * self.scale as f32 / framing.view.matrix2.x_axis.x;
-        Some((shown.comp, picker.pick(&shown.scene, point, at.modifiers.ctrl, slop)))
+        // The view maps stage units to physical pixels.
+        let per_pixel = self.scale as f32 / framing.view.matrix2.x_axis.x;
+        let node = picker.pick(&shown.scene, point, at.modifiers.ctrl, PICK_SLOP * per_pixel);
+        Some(Hit { comp: shown.comp, node, point, per_pixel })
     }
 
     /// A press picks (ADR 0005): the stage changes its mirror at once and
@@ -281,11 +320,10 @@ impl Stage {
     /// - On a node: it becomes the selection, unless already selected (so
     ///   a drag can move a whole multi-selection). Shift toggles it.
     /// - On nothing: clears the selection. Shift leaves it alone.
-    fn pick_on_press(&mut self, at: PointerAt) -> Option<ToTools> {
-        let (comp, node) = self.hit(at)?;
+    fn pick_on_press(&mut self, hit: &Hit, shift: bool) -> Option<ToTools> {
+        let comp = hit.comp;
         let current = self.selection.shown(self.host.project()?, comp);
-        let shift = at.modifiers.shift;
-        let (nodes, mode) = match node {
+        let (nodes, mode) = match hit.node {
             Some(n) if shift => (vec![n], PickMode::Toggle),
             Some(n) if current.contains(&n) => return None,
             Some(n) => (vec![n], PickMode::Replace),
@@ -293,6 +331,26 @@ impl Stage {
             None => (Vec::new(), PickMode::Replace),
         };
         self.selection = selection::Selection::set(comp, mode.apply(&current, &nodes));
+        Some(ToTools::Picked { comp, nodes, mode })
+    }
+
+    /// A marquee over stage rect `rect` picks what it touches: replacing
+    /// the selection (already cleared by the press), or adding with Shift.
+    /// `None` if that changes nothing, or `comp` is no longer shown.
+    fn pick_marquee(&mut self, comp: CompId, rect: Rect, shift: bool, deep: bool) -> Option<ToTools> {
+        let project = self.host.project()?;
+        let shown = Shown::now(project, &self.transport);
+        if shown.comp != comp {
+            return None;
+        }
+        let nodes = pick::Picker::new(&project.compositions[&comp]).in_rect(&shown.scene, rect, deep);
+        let current = self.selection.shown(project, comp);
+        let mode = if shift { PickMode::Add } else { PickMode::Replace };
+        let after = mode.apply(&current, &nodes);
+        if after == current {
+            return None;
+        }
+        self.selection = selection::Selection::set(comp, after);
         Some(ToTools::Picked { comp, nodes, mode })
     }
 
@@ -323,11 +381,28 @@ impl Stage {
         let shown = Shown::now(project, &self.transport);
         let picker = pick::Picker::new(&project.compositions[&shown.comp]);
         let selected = self.selection.shown(project, shown.comp);
-        let hover = self.hover.filter(|n| !selected.contains(n));
-        let marks = selected.iter().map(|&n| (n, SELECTION)).chain(hover.map(|n| (n, HOVER)));
-        let overlay: Vec<Overlay> = marks
-            .filter_map(|(n, color)| Some(Overlay::Box { rect: picker.bounds(&shown.scene, n)?, color }))
+        // A live marquee previews what it would pick; otherwise the hover.
+        let marquee = match &self.gesture {
+            Some(Gesture::Marquee { comp, from, to, deep, live: true, .. }) if *comp == shown.comp => {
+                Rect::around([*from, *to]).map(|rect| (rect, *deep))
+            }
+            _ => None,
+        };
+        let preview = match marquee {
+            Some((rect, deep)) => picker.in_rect(&shown.scene, rect, deep),
+            None => self.hover.into_iter().collect(),
+        };
+        let hovered = preview.into_iter().filter(|n| !selected.contains(n));
+        let marks = selected.iter().map(|&n| (n, SELECTION)).chain(hovered.map(|n| (n, HOVER)));
+        let mut overlay: Vec<Overlay> = marks
+            .filter_map(|(n, color)| {
+                Some(Overlay::Box { rect: picker.bounds(&shown.scene, n)?, color, outset: BOX_OUTSET })
+            })
             .collect();
+        if let Some((rect, _)) = marquee {
+            overlay.push(Overlay::Fill { rect, color: MARQUEE });
+            overlay.push(Overlay::Box { rect, color: SELECTION, outset: 0.0 });
+        }
         let frame = Frame {
             project,
             scene: &shown.scene,
@@ -345,6 +420,27 @@ impl Stage {
         self.dirty = false;
         self.send(&ready)
     }
+}
+
+/// What's under the pointer.
+struct Hit {
+    /// The composition shown.
+    comp: CompId,
+    /// The node a click there picks (Ctrl: the deepest one).
+    node: Option<NodeId>,
+    /// The pointer in stage coordinates.
+    point: Vec2,
+    /// Stage units per logical pixel.
+    per_pixel: f32,
+}
+
+/// A press-drag-release in progress on the stage. Stage state (ADR 0005):
+/// lost if the stage restarts, and dropped by `CancelGesture`.
+enum Gesture {
+    /// Pressed on empty space at `from` (stage coordinates): a marquee to
+    /// `to`, once the pointer has moved far enough to be `live`. `shift`
+    /// was held at the press (add, don't replace); `deep` is Ctrl now.
+    Marquee { comp: CompId, from: Vec2, to: Vec2, shift: bool, deep: bool, live: bool },
 }
 
 /// The edited composition as the editor shows it right now: the root

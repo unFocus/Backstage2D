@@ -60,6 +60,26 @@ impl<'c> Picker<'c> {
             .map(|item| self.target(Self::owner(item), deep))
     }
 
+    /// What a marquee over stage rect `rect` selects: every unlocked node
+    /// whose items' bounds touch it, picked by the same rule as a click
+    /// (`deep`: Ctrl), each once, bottom to top.
+    pub fn in_rect(&self, scene: &Scene, rect: Rect, deep: bool) -> Vec<NodeId> {
+        let mut nodes = Vec::new();
+        for item in &scene.items {
+            if self.flags.get(&Self::owner(item)).is_some_and(|f| f.locked) {
+                continue;
+            }
+            if !item_bounds(item).is_some_and(|b| b.intersects(rect)) {
+                continue;
+            }
+            let node = self.target(Self::owner(item), deep);
+            // Painter's order: a node drawn again higher up moves up.
+            nodes.retain(|n| *n != node);
+            nodes.push(node);
+        }
+        nodes
+    }
+
     /// Bounds on the stage of everything `node` draws (its whole subtree),
     /// or `None` if it draws nothing.
     pub fn bounds(&self, scene: &Scene, node: NodeId) -> Option<Rect> {
@@ -173,6 +193,42 @@ mod tests {
         assert_eq!(pick(&project, ball, false), Some(GROUND), "the ground is on top");
         Command::SetNodeFlags { comp: STAGE, node: GROUND, flags: lock }.apply(&mut project).unwrap();
         assert_eq!(pick(&project, ball, false), Some(FREE_BALL), "locked: the ball under it");
+    }
+
+    fn marquee(project: &Project, min: Vec2, max: Vec2, deep: bool) -> Vec<NodeId> {
+        let scene = scene(project);
+        Picker::new(&project.compositions[&STAGE]).in_rect(
+            &scene,
+            backstage_render::pick::Rect { min, max },
+            deep,
+        )
+    }
+
+    #[test]
+    fn a_marquee_selects_what_it_touches_bottom_to_top() {
+        let project = sample::bounce();
+        let all = marquee(&project, Vec2::ZERO, Vec2::new(550.0, 400.0), false);
+        assert_eq!(all, [GROUND, EYES, FREE_BALL, SYNCED_BALL], "painter's order");
+        let above_ground = marquee(&project, Vec2::new(10.0, 10.0), Vec2::new(540.0, 330.0), false);
+        assert_eq!(above_ground, [EYES, FREE_BALL, SYNCED_BALL]);
+        // Just touching the free ball's edge is enough.
+        let ball = centre(&project, FREE_BALL);
+        let edge = marquee(&project, ball, ball + Vec2::splat(200.0), false);
+        assert!(edge.contains(&FREE_BALL), "{edge:?}");
+        assert_eq!(marquee(&project, Vec2::new(1.0, 1.0), Vec2::new(5.0, 5.0), false), [], "nothing there");
+    }
+
+    #[test]
+    fn a_marquee_follows_the_pick_rules() {
+        let mut project = grouped();
+        let everything = (Vec2::ZERO, Vec2::new(550.0, 400.0));
+        assert!(marquee(&project, everything.0, everything.1, false).contains(&GROUP), "the outermost group");
+        let deep = marquee(&project, everything.0, everything.1, true);
+        assert!(deep.contains(&GROUND) && !deep.contains(&GROUP), "Ctrl: the nodes themselves");
+        let lock = NodeFlags { locked: true, ..Default::default() };
+        Command::SetNodeFlags { comp: STAGE, node: GROUP, flags: lock }.apply(&mut project).unwrap();
+        let unlocked = marquee(&project, everything.0, everything.1, false);
+        assert!(!unlocked.contains(&GROUP) && !unlocked.is_empty(), "locked: left out, {unlocked:?}");
     }
 
     #[test]

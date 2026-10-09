@@ -62,7 +62,7 @@ The design is recorded in [ADR 0004](adr/0004-commands-and-document-authority.md
 - On-stage selection and transforms, all drawn by the engine:
   - [x] Hit testing on the real paths (fills, and strokes with a few pixels of slop), click selection (outermost group, Ctrl for the deepest node, Shift toggles, locked nodes let clicks through), hover, and selection boxes. The stage applies a pick at once and reports `Picked` (protocol v7, ADR 0005).
   - [x] Test tooling: `backstage_uidriver` gives the headless UI smoke test real pointer and keyboard input (cage's virtual input) and screenshots. The smoke test clicks on the stage through GTK. The stage reports its `Framing` (protocol v8).
-  - [ ] Marquee selection
+  - [x] Marquee selection: drag on empty stage; it selects what it touches, Shift adds, and hover boxes preview the result. Selection boxes now sit 2 px outside the bounds.
   - [ ] Transform handles (scale, rotate)
   - [ ] Spatial grid snapping
 - [ ] Drag gestures become commands. Undo works across them.

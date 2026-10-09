@@ -410,16 +410,21 @@ fn stage_to_view(size: (u32, u32), p: backstage_core::Vec2) -> (f32, f32) {
 /// The centre of everything `node` (a node of the sample's stage) draws at
 /// time zero, in stage coordinates.
 fn centre_of(node: backstage_core::NodeId) -> backstage_core::Vec2 {
+    let b = bounds_of(node);
+    (b.min + b.max) / 2.0
+}
+
+/// The bounds of everything `node` draws at time zero.
+fn bounds_of(node: backstage_core::NodeId) -> backstage_render::pick::Rect {
     let project = sample::bounce();
     let scene = backstage_core::evaluate(&project, &backstage_core::RuntimeState::default(), Time::ZERO);
-    let b = scene
+    scene
         .items
         .iter()
         .filter(|i| i.node == node || i.instance.first() == Some(&node))
         .filter_map(backstage_render::pick::item_bounds)
         .reduce(backstage_render::pick::Rect::union)
-        .unwrap();
-    (b.min + b.max) / 2.0
+        .unwrap()
 }
 
 const VIEW: (u32, u32) = (550, 400);
@@ -505,11 +510,12 @@ fn locked_nodes_let_clicks_through() {
     assert_eq!(picks(&mut stage), picked(vec![], PickMode::Replace), "nothing under the locked ground");
 }
 
-/// The pixel on the top edge of the box around stage rect `min..max`.
+/// The pixel on the top edge of the box around stage rect `min..max`,
+/// drawn 2 px outside it.
 fn top_edge(min: backstage_core::Vec2, max: backstage_core::Vec2) -> (u32, u32) {
     let (x0, y0) = stage_to_view(VIEW, min);
     let (x1, _) = stage_to_view(VIEW, max);
-    (((x0 + x1) / 2.0) as u32, y0.floor() as u32)
+    (((x0 + x1) / 2.0) as u32, (y0 - 2.0).floor() as u32)
 }
 
 #[test]
@@ -521,7 +527,7 @@ fn the_selection_and_hover_get_boxes_without_waiting_for_the_editor() {
     let edge = top_edge(backstage_core::Vec2::new(0.0, 340.0), backstage_core::Vec2::new(550.0, 400.0));
     let ground = centre_of(ids::GROUND);
 
-    // The edge row is the ground's anti-aliased top: half green, half white.
+    // The box's row is just above the ground, on white.
     let under = stage.next_frame().pixel(edge.0, edge.1).map(|c| c as f32 / 255.0);
     let (x, y) = stage_to_view(VIEW, ground);
     stage.send(&ToStage::Pointer(PointerEvent::Move(PointerAt::new(x, y))));
@@ -533,6 +539,10 @@ fn the_selection_and_hover_get_boxes_without_waiting_for_the_editor() {
     assert!(color_close(stage.next_frame().pixel(edge.0, edge.1), SELECTION));
 
     stage.send(&ToStage::Selection { comp: ids::STAGE, nodes: vec![] });
+    stage.send(&ToStage::Pointer(PointerEvent::Leave));
+    // A frame can come between the two (the ground hovered, no longer
+    // selected): read one drawn after both, past a barrier.
+    picks(&mut stage);
     stage.send(&ToStage::Pointer(PointerEvent::Leave));
     let plain = stage.next_frame().pixel(edge.0, edge.1);
     assert!(color_close(plain, under), "no box: {plain:?}");
@@ -592,4 +602,89 @@ fn the_stage_reports_where_it_sits_in_logical_pixels() {
     let settings = ProjectSettings { stage_width: 275, ..sample::bounce().settings };
     assert!(matches!(stage.submit(1, Entry::Do(Command::SetSettings(settings))), ToTools::Committed { .. }));
     assert_ne!(framing(&mut stage), (origin, scale));
+}
+
+/// A drag from stage point `from` to `to`, with moves in between, as GTK
+/// reports one.
+fn drag(
+    stage: &mut StageHarness,
+    from: backstage_core::Vec2,
+    to: backstage_core::Vec2,
+    modifiers: backstage_protocol::Modifiers,
+) {
+    let at = |p| {
+        let (x, y) = stage_to_view(VIEW, p);
+        PointerAt { x, y, modifiers }
+    };
+    stage.send(&ToStage::Pointer(PointerEvent::Down(at(from))));
+    for t in [0.25, 0.5, 1.0] {
+        stage.send(&ToStage::Pointer(PointerEvent::Move(at(from.lerp(to, t)))));
+    }
+    stage.send(&ToStage::Pointer(PointerEvent::Up(at(to))));
+}
+
+#[test]
+fn a_marquee_selects_what_it_touches() {
+    use backstage_core::Vec2;
+    use backstage_protocol::{Modifiers, PickMode};
+    let shift = Modifiers { shift: true, ..Default::default() };
+    let mut stage = ready_to_click();
+    click(&mut stage, centre_of(ids::GROUND), Modifiers::default());
+    picks(&mut stage);
+
+    // From an empty corner to just past the free ball's centre.
+    let corner = Vec2::new(300.0, 10.0);
+    drag(&mut stage, corner, centre_of(ids::FREE_BALL), Modifiers::default());
+    assert_eq!(
+        picks(&mut stage),
+        [picked(vec![], PickMode::Replace), picked(vec![ids::FREE_BALL], PickMode::Replace)].concat(),
+        "cleared on the press, then the marquee"
+    );
+
+    // Shift adds, and its press clears nothing.
+    let synced = centre_of(ids::SYNCED_BALL);
+    drag(&mut stage, Vec2::new(10.0, 10.0), synced, shift);
+    assert_eq!(picks(&mut stage), picked(vec![ids::SYNCED_BALL], PickMode::Add));
+    drag(&mut stage, Vec2::new(10.0, 10.0), synced, shift);
+    assert_eq!(picks(&mut stage), [], "nothing new to add");
+
+    // Too short to be a marquee: just a click on empty stage. It's inside
+    // the free ball's bounds, off the ball, so a marquee would pick it.
+    let corner = bounds_of(ids::FREE_BALL).min + Vec2::splat(2.0);
+    drag(&mut stage, corner, corner + Vec2::splat(1.0), Modifiers::default());
+    assert_eq!(picks(&mut stage), picked(vec![], PickMode::Replace), "only the press's clear");
+}
+
+#[test]
+fn a_marquee_is_drawn_while_dragging_and_can_be_cancelled() {
+    use backstage_core::Vec2;
+    use backstage_render::MARQUEE;
+    let mut stage = ready_to_click();
+    let inside = stage_to_view(VIEW, Vec2::new(60.0, 60.0));
+    let pixel = |stage: &mut StageHarness| stage.next_frame().pixel(inside.0 as u32, inside.1 as u32);
+    let white = pixel(&mut stage);
+
+    let at = |p: Vec2| {
+        let (x, y) = stage_to_view(VIEW, p);
+        PointerAt::new(x, y)
+    };
+    stage.send(&ToStage::Pointer(PointerEvent::Down(at(Vec2::new(10.0, 10.0)))));
+    stage.send(&ToStage::Pointer(PointerEvent::Move(at(Vec2::new(120.0, 120.0)))));
+    let tinted = mix(MARQUEE, white.map(|c| c as f32 / 255.0));
+    // Each message may get a frame of its own: wait for the last one's.
+    let shows = |stage: &mut StageHarness, color| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if color_close(pixel(stage), color) {
+                return true;
+            }
+        }
+        false
+    };
+    assert!(shows(&mut stage, tinted), "the marquee's fill");
+
+    stage.send(&ToStage::CancelGesture);
+    assert!(shows(&mut stage, white.map(|c| c as f32 / 255.0)), "gone");
+    stage.send(&ToStage::Pointer(PointerEvent::Up(at(Vec2::new(120.0, 120.0)))));
+    assert_eq!(picks(&mut stage), [], "a cancelled marquee picks nothing");
 }

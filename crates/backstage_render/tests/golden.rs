@@ -7,8 +7,8 @@
 
 use backstage_core::{RuntimeState, Time, evaluate, sample};
 use backstage_render::{
-    FALLBACK_ENV, Frame, HOVER, HeadlessGpu, OFFSCREEN_FORMAT, OffscreenTarget, Overlay, Presentation,
-    Renderer, SELECTION,
+    FALLBACK_ENV, Frame, HOVER, HeadlessGpu, MARQUEE, OFFSCREEN_FORMAT, OffscreenTarget, Overlay,
+    Presentation, Renderer, SELECTION,
 };
 use image::{Rgba, RgbaImage};
 use std::path::{Path, PathBuf};
@@ -166,30 +166,45 @@ fn ground_and_free_ball_outlined() {
 #[test]
 fn selection_and_hover_boxes() {
     use backstage_core::sample::ids;
-    use backstage_render::pick::{Rect, item_bounds};
-    // The ground selected; the free ball (all of its instance's items)
-    // under the pointer.
-    let bounds = |scene: &backstage_core::Scene, owned: &dyn Fn(&backstage_core::DrawItem) -> bool| {
-        scene.items.iter().filter(|i| owned(i)).filter_map(item_bounds).reduce(Rect::union).unwrap()
-    };
-    let image = render_with(
-        Presentation::Editor,
-        (550, 400),
-        Time::ZERO,
-        1.0,
-        None,
-        |_| None,
-        |scene| {
-            vec![
-                Overlay::Box { rect: bounds(scene, &|i| i.node == ids::GROUND), color: SELECTION },
-                Overlay::Box {
-                    rect: bounds(scene, &|i| i.instance.first() == Some(&ids::FREE_BALL)),
-                    color: HOVER,
-                },
-            ]
-        },
-    );
+    // The ground selected (its box just outside the stage edge it shares);
+    // the free ball (all of its instance's items) under the pointer.
+    let image = render_editor_marks(|scene| {
+        vec![
+            Overlay::Box { rect: bounds(scene, &|i| i.node == ids::GROUND), color: SELECTION, outset: 2.0 },
+            Overlay::Box {
+                rect: bounds(scene, &|i| i.instance.first() == Some(&ids::FREE_BALL)),
+                color: HOVER,
+                outset: 2.0,
+            },
+        ]
+    });
     check("sample_t0_selection_hover_550x400_1x", image);
+}
+
+#[test]
+fn marquee() {
+    use backstage_core::Vec2;
+    use backstage_render::pick::Rect;
+    // Half-way across the free ball, which it would pick.
+    let rect = Rect { min: Vec2::new(300.0, 60.0), max: Vec2::new(420.0, 160.0) };
+    let image = render_editor_marks(|_| {
+        vec![Overlay::Fill { rect, color: MARQUEE }, Overlay::Box { rect, color: SELECTION, outset: 0.0 }]
+    });
+    check("sample_t0_marquee_550x400_1x", image);
+}
+
+/// Bounds of the items `owned` picks.
+fn bounds(
+    scene: &backstage_core::Scene,
+    owned: &dyn Fn(&backstage_core::DrawItem) -> bool,
+) -> backstage_render::pick::Rect {
+    use backstage_render::pick::{Rect, item_bounds};
+    scene.items.iter().filter(|i| owned(i)).filter_map(item_bounds).reduce(Rect::union).unwrap()
+}
+
+/// The sample at time zero in the editor, with `marks` drawn over it.
+fn render_editor_marks(marks: impl Fn(&backstage_core::Scene) -> Vec<Overlay>) -> RgbaImage {
+    render_with(Presentation::Editor, (550, 400), Time::ZERO, 1.0, None, |_| None, marks)
 }
 
 #[test]

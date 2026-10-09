@@ -74,6 +74,19 @@ How a press changes the selection:
 Picks happen on the press, not the release, so a drag starts from the same
 press.
 
+The marquee (M4 step 3):
+- **Starting one:** a press on empty space, after it has cleared the
+  selection (or not, with Shift).
+- **Becoming live:** once the pointer has moved 3 logical pixels. Until
+  then, the press is a plain click.
+- **What it selects:** every unlocked node whose bounds touch the
+  rectangle, by the same rules as a click (Ctrl for the deepest nodes).
+  They come in painter's order, so the topmost is the primary.
+- **On release:** `Picked { Replace }`, or `{ Add }` with Shift. Nothing is
+  sent if the selection wouldn't change.
+- **While dragging:** what the marquee would select gets hover boxes.
+- **Cancelling:** `CancelGesture` drops it.
+
 If both sides change the selection at the same time, the editor's
 `Selection` wins, because the editor is the authority. A drag acts on the
 nodes the stage showed as selected when it started.

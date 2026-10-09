@@ -30,6 +30,8 @@ pub const ORIGIN_MARKER: [f32; 4] = [0.15, 0.15, 0.18, 0.9];
 pub const SELECTION: [f32; 4] = [0x2f as f32 / 255.0, 0x7d as f32 / 255.0, 1.0, 1.0];
 /// The box around what a click would pick.
 pub const HOVER: [f32; 4] = [0x2f as f32 / 255.0, 0x7d as f32 / 255.0, 1.0, 0.5];
+/// Inside the marquee.
+pub const MARQUEE: [f32; 4] = [0x2f as f32 / 255.0, 0x7d as f32 / 255.0, 1.0, 0.15];
 /// Multisample count for anti-aliasing.
 pub const SAMPLE_COUNT: u32 = 4;
 /// Gap between the stage and the viewport edge, in logical pixels.
@@ -58,8 +60,12 @@ pub struct Frame<'a> {
 /// An editor mark drawn over the stage, in screen pixels whatever the zoom.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Overlay {
-    /// A 1 px rectangle outline around `rect` (stage coordinates).
-    Box { rect: pick::Rect, color: [f32; 4] },
+    /// A 1 px rectangle outline around `rect` (stage coordinates), drawn
+    /// `outset` logical pixels outside it, so it stays clear of edges it
+    /// shares with what's drawn (the stage's, say).
+    Box { rect: pick::Rect, color: [f32; 4], outset: f32 },
+    /// `rect` filled.
+    Fill { rect: pick::Rect, color: [f32; 4] },
 }
 
 /// How the stage is framed in the viewport.
@@ -529,7 +535,19 @@ fn overlay_quads(framing: &Framing, frame: &Frame, background: backstage_core::C
     }
     for overlay in frame.overlay.iter().filter(|_| editor) {
         match *overlay {
-            Overlay::Box { rect, color } => box_quads(&mut quads, framing, rect, scale, color),
+            Overlay::Box { rect, color, outset } => {
+                box_quads(&mut quads, framing, rect, scale, outset * scale, color)
+            }
+            Overlay::Fill { rect, color } => {
+                let a = framing.view.transform_point2(rect.min);
+                let b = framing.view.transform_point2(rect.max);
+                quads.push(Quad {
+                    center: ((a + b) / 2.0).to_array(),
+                    half_size: ((b - a).abs() / 2.0).to_array(),
+                    angle: 0.0,
+                    color,
+                });
+            }
         }
     }
     if let Some((px, py)) = frame.pointer.filter(|_| editor) {
@@ -543,11 +561,18 @@ fn overlay_quads(framing: &Framing, frame: &Frame, background: backstage_core::C
     (quads, under)
 }
 
-/// A 1 px (logical) outline around `rect`, its edges on pixel centres so
-/// they stay crisp.
-fn box_quads(quads: &mut Vec<Quad>, framing: &Framing, rect: pick::Rect, scale: f32, color: [f32; 4]) {
-    let a = framing.view.transform_point2(rect.min);
-    let b = framing.view.transform_point2(rect.max);
+/// A 1 px (logical) outline around `rect`, `outset` physical pixels
+/// outside it, its edges on pixel centres so they stay crisp.
+fn box_quads(
+    quads: &mut Vec<Quad>,
+    framing: &Framing,
+    rect: pick::Rect,
+    scale: f32,
+    outset: f32,
+    color: [f32; 4],
+) {
+    let a = framing.view.transform_point2(rect.min) - Vec2::splat(outset);
+    let b = framing.view.transform_point2(rect.max) + Vec2::splat(outset);
     let (x0, y0) = (a.x.min(b.x).floor() + 0.5, a.y.min(b.y).floor() + 0.5);
     let (x1, y1) = (a.x.max(b.x).floor() + 0.5, a.y.max(b.y).floor() + 0.5);
     let t = scale.max(1.0) / 2.0;

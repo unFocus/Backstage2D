@@ -55,7 +55,8 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
   - A click selects the outermost group under the pointer.
   - Ctrl+click selects the deepest node.
   - Shift+click toggles a node in or out of the selection.
-  - Clicking empty space clears the selection.
+  - Clicking empty space clears the selection. Dragging from there draws a
+    marquee that selects what it touches (Shift adds).
   - Locked nodes can't be picked.
   - The stage applies a pick at once and reports `ToTools::Picked`; the
     editor echoes `Selection`.

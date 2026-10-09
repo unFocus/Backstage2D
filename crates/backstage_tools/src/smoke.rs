@@ -15,7 +15,7 @@
 //! The app calls the hooks below and carries out the [`SmokeStep`]s they
 //! return.
 
-use backstage_core::sample::ids::{FREE_BALL, GROUND};
+use backstage_core::sample::ids::{EYES, FREE_BALL, GROUND, SYNCED_BALL};
 use backstage_core::{CompId, NodeId, Project, RuntimeState, Time, Vec2, evaluate_from};
 use std::time::Duration;
 
@@ -34,37 +34,56 @@ pub enum ClickTarget {
     Stage(Vec2),
 }
 
-/// One click on the stage and the selection it should leave.
+/// One click or drag on the stage, and the selection it should leave.
 struct Pick {
     what: &'static str,
     target: ClickTarget,
+    /// Drag from `target` to here instead of clicking.
+    drag_to: Option<ClickTarget>,
     shift: bool,
     expected: &'static [NodeId],
 }
 
-/// The sample's stage, clicked through the real GUI.
-const PICKS: [Pick; 3] = [
-    Pick { what: "clicked the ground", target: ClickTarget::Node(GROUND), shift: false, expected: &[GROUND] },
+/// The sample's stage, clicked and dragged on through the real GUI.
+const PICKS: [Pick; 4] = [
+    Pick {
+        what: "clicked the ground",
+        target: ClickTarget::Node(GROUND),
+        drag_to: None,
+        shift: false,
+        expected: &[GROUND],
+    },
     Pick {
         what: "shift-clicked the free ball",
         target: ClickTarget::Node(FREE_BALL),
+        drag_to: None,
         shift: true,
         expected: &[GROUND, FREE_BALL],
     },
     Pick {
         what: "clicked empty stage",
         target: ClickTarget::Stage(Vec2::new(10.0, 10.0)),
+        drag_to: None,
         shift: false,
         expected: &[],
+    },
+    // Everything above the ground (stage y 340..400), bottom to top.
+    Pick {
+        what: "marquee-selected the eyes and both balls",
+        target: ClickTarget::Stage(Vec2::new(10.0, 10.0)),
+        drag_to: Some(ClickTarget::Stage(Vec2::new(540.0, 330.0))),
+        shift: false,
+        expected: &[EYES, FREE_BALL, SYNCED_BALL],
     },
 ];
 
 /// What the app should do next.
 #[derive(Debug, PartialEq)]
 pub enum SmokeStep {
-    /// Click on the stage through the UI driver.
-    StageClick {
+    /// Click on the stage through the UI driver, or drag to `drag_to`.
+    StageInput {
         target: ClickTarget,
+        drag_to: Option<ClickTarget>,
         shift: bool,
     },
     /// Scrub the timeline to this time.
@@ -150,7 +169,8 @@ impl SmokeTest {
     }
 
     fn click(i: usize) -> SmokeStep {
-        SmokeStep::StageClick { target: PICKS[i].target, shift: PICKS[i].shift }
+        let Pick { target, drag_to, shift, .. } = PICKS[i];
+        SmokeStep::StageInput { target, drag_to, shift }
     }
 
     /// A pick on the stage was applied; `selection` is the editor's now.
@@ -341,13 +361,18 @@ mod tests {
     fn stage_clicks_run_before_the_scrub_and_check_each_selection() {
         let mut smoke = SmokeTest::new(true);
         let clicks = frames(&mut smoke, 1, FRAMES_PER_PHASE);
-        assert_eq!(clicks, [SmokeStep::StageClick { target: ClickTarget::Node(GROUND), shift: false }]);
-        assert!(matches!(smoke.picked(&[GROUND]), Some(SmokeStep::StageClick { shift: true, .. })));
+        let ground = SmokeStep::StageInput { target: ClickTarget::Node(GROUND), drag_to: None, shift: false };
+        assert_eq!(clicks, [ground]);
+        assert!(matches!(smoke.picked(&[GROUND]), Some(SmokeStep::StageInput { shift: true, .. })));
         assert!(matches!(
             smoke.picked(&[GROUND, FREE_BALL]),
-            Some(SmokeStep::StageClick { shift: false, .. })
+            Some(SmokeStep::StageInput { shift: false, drag_to: None, .. })
         ));
-        assert_eq!(smoke.picked(&[]), Some(SmokeStep::Scrub(Time::from_secs(1))));
+        assert!(
+            matches!(smoke.picked(&[]), Some(SmokeStep::StageInput { drag_to: Some(_), .. })),
+            "a marquee"
+        );
+        assert_eq!(smoke.picked(&[EYES, FREE_BALL, SYNCED_BALL]), Some(SmokeStep::Scrub(Time::from_secs(1))));
         assert_eq!(smoke.scrubbed(), Some(SmokeStep::Select));
 
         let mut smoke = SmokeTest::new(true);
