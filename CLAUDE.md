@@ -9,6 +9,9 @@ changing anything architectural.
 - ADR 0004: edit commands, the document log, and document authority.
 - ADR 0005: edit state (selection, playhead) lives in the editor; the
   stage mirrors it.
+- ADR 0006: on-stage drags are stage gestures. They preview on a copy, and
+  the stage commits one command. Animated properties get keys at the
+  playhead.
 
 ## Environment
 - **Dev host:** Bazzite (immutable Fedora 44), KDE on Wayland, AMD RX 6800.
@@ -38,8 +41,9 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
   instead of the built-in sample. File → Open (Ctrl+O) sends another one to
   the running stage with `Load`; the stage takes no project argument.
   Save is Ctrl+S, and Save As is Ctrl+Shift+S. Enter plays or pauses the
-  timeline, Escape clears the selection, and F2 (or a double-click) renames
-  the selected layer. Window shortcuts step aside
+  timeline. Escape cancels a drag on the stage, or else clears the
+  selection. The arrow keys nudge the selection by 1 px, or 10 with Shift.
+  F2 (or a double-click) renames the selected layer. Window shortcuts step aside
   for focused text fields, spin buttons, and popovers
   (`keys_belong_to_focus` in `app.rs`).
 - The editor owns the playhead and sends it with `ToStage::Transport`,
@@ -58,6 +62,9 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
   - Clicking empty space clears the selection. Dragging from there draws a
     marquee that selects what it touches (Shift adds).
   - Locked nodes can't be picked.
+  - Dragging a selected node moves the whole selection. `edit::move_nodes`
+    keys animated properties at the playhead and sets rest values for the
+    rest. The stage commits the drag itself (`Committed { request: None }`).
   - The stage applies a pick at once and reports `ToTools::Picked`; the
     editor echoes `Selection`.
 - The stage reports where it sits in the stage section with

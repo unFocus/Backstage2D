@@ -24,6 +24,8 @@ pub enum Key {
     Down,
     Left,
     Right,
+    /// With ctrl: undo, and with shift too, redo.
+    Z,
 }
 
 impl Key {
@@ -39,6 +41,7 @@ impl Key {
             "down" => Key::Down,
             "left" => Key::Left,
             "right" => Key::Right,
+            "z" => Key::Z,
             _ => bail!("unknown key {name:?}"),
         })
     }
@@ -56,6 +59,7 @@ impl Key {
             Key::Right => 106,
             Key::Down => 108,
             Key::Delete => 111,
+            Key::Z => 44,
         }
     }
 
@@ -180,6 +184,7 @@ mod tests {
             Some(Command::Click { x: 1.0, y: 2.0, mods: Mods::default() })
         );
         assert_eq!(parse("key escape down").unwrap(), Some(Command::Key { key: Key::Escape, pressed: true }));
+        assert_eq!(parse("key z up").unwrap(), Some(Command::Key { key: Key::Z, pressed: false }));
         assert_eq!(parse("shot /tmp/a.png").unwrap(), Some(Command::Shot("/tmp/a.png".into())));
         assert_eq!(parse("  wait 250  # settle").unwrap(), Some(Command::Wait(250)));
         assert_eq!(parse("").unwrap(), None);

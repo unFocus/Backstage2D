@@ -65,7 +65,7 @@ The design is recorded in [ADR 0004](adr/0004-commands-and-document-authority.md
   - [x] Marquee selection: drag on empty stage; it selects what it touches, Shift adds, and hover boxes preview the result. Selection boxes now sit 2 px outside the bounds.
   - [ ] Transform handles (scale, rotate)
   - [ ] Spatial grid snapping
-- [ ] Drag gestures become commands. Undo works across them.
+- [x] Drag gestures become commands. Undo works across them. Dragging selected nodes previews live and commits one command on release. Animated properties get a key at the playhead, and others change their rest value (ADR 0006). The arrow keys nudge the selection the same way (1 px, or 10 with Shift). Escape cancels a drag.
 - [x] Render as soon as input arrives instead of on the fixed tick; idle while paused. Protocol v6 carries pointer presses, releases, and modifiers. The latency probe's median went from 16.6 ms to 0.9 ms (ADR 0002).
 
 ### M5: Test Movie
@@ -85,6 +85,8 @@ The design is recorded in [ADR 0004](adr/0004-commands-and-document-authority.md
   - Editing a composition in place, with its parent shown around it, and
     returning to where you were when you leave it
   - Library: renaming compositions, opening assets
+  - Properties: key animated properties at the playhead, as stage drags do
+    (`edit::set_values`), instead of editing rest values
   - Restoring a choice of several crashed sessions, not just the newest
 - Zero-copy stage frames (DMA-BUF import with `GdkDmabufTexture` and `GtkGraphicsOffload`)
 - Dockable panels (libpanel)

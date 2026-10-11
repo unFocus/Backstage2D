@@ -3,6 +3,7 @@
 //! by the editor with `ToStage::Transport`; until then the stage plays the
 //! root's default animation from zero.
 
+use backstage_core::edit::At;
 use backstage_core::{AnimId, CompId, RuntimeState, Time};
 use std::time::Instant;
 
@@ -57,11 +58,12 @@ impl Transport {
     /// composition (the empty instance path), from time zero. No mixer means
     /// its default animation.
     pub fn state(&self) -> RuntimeState {
-        let mut state = RuntimeState::default();
-        if let Some(anim) = self.animation {
-            state.play(&Vec::new(), anim, Time::ZERO);
-        }
-        state
+        self.at(self.since).state()
+    }
+
+    /// The playhead at `now`, for edits made there.
+    pub fn at(&self, now: Instant) -> At {
+        At { anim: self.animation, clock: self.now(now) }
     }
 }
 

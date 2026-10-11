@@ -34,6 +34,14 @@ impl DocumentHost {
         }
     }
 
+    /// Applies an entry the stage made itself (an on-stage drag) and
+    /// returns its `Committed`, with no request to answer.
+    pub fn commit(&mut self, entry: &Entry) -> Result<ToTools, String> {
+        let doc = self.doc.as_mut().ok_or("no document loaded")?;
+        let seq = doc.apply(entry).map_err(|e| e.to_string())?;
+        Ok(ToTools::Committed { seq, request: None, entry: entry.clone() })
+    }
+
     pub fn project(&self) -> Option<&Project> {
         self.doc.as_ref().map(Document::project)
     }
@@ -52,6 +60,22 @@ mod tests {
 
     fn nudge(x: f32) -> Entry {
         Entry::Do(Command::SetRest { comp: STAGE, node: GROUND, rest: Props::at(x, 0.0) })
+    }
+
+    #[test]
+    fn the_stages_own_commits_answer_no_request() {
+        let mut host = DocumentHost::default();
+        assert!(host.commit(&nudge(1.0)).is_err(), "nothing loaded");
+        host.load(&sample_snapshot(), &[]).unwrap();
+        assert_eq!(
+            host.commit(&nudge(1.0)),
+            Ok(ToTools::Committed { seq: 1, request: None, entry: nudge(1.0) })
+        );
+        assert!(host.commit(&Entry::Redo).is_err(), "nothing to redo");
+        assert_eq!(
+            host.submit(5, &Entry::Undo),
+            ToTools::Committed { seq: 2, request: Some(5), entry: Entry::Undo }
+        );
     }
 
     #[test]

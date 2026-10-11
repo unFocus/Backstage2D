@@ -9,7 +9,7 @@ pub mod scene;
 pub mod track;
 
 pub use runtime::{InstancePath, Layer, Mixer, RuntimeState, Weight};
-pub use scene::{DrawContent, DrawItem, Scene};
+pub use scene::{DrawContent, DrawItem, NodeState, Scene};
 
 use crate::animation::{Animation, Property, Track, Value};
 use crate::geom::{ColorTransform, Transform};
@@ -33,14 +33,14 @@ pub fn evaluate<'p>(project: &'p Project, state: &RuntimeState, now: Time) -> Sc
 /// time). The root runs as a free instance at the empty path, so its mixer
 /// in `state` picks its animations.
 pub fn evaluate_from<'p>(project: &'p Project, state: &RuntimeState, root: CompId, now: Time) -> Scene<'p> {
-    let mut eval = Evaluator { project, state, now, items: Vec::new() };
+    let mut eval = Evaluator { project, state, now, items: Vec::new(), nodes: BTreeMap::new() };
     if let Some(comp) = project.compositions.get(&root) {
         let path = InstancePath::new();
         let default = comp.default_animation;
         let layers = eval.free_layers(comp, &path, default);
         eval.composition(comp, layers, &path, &Inherited::ROOT, 0);
     }
-    Scene { items: eval.items }
+    Scene { items: eval.items, nodes: eval.nodes }
 }
 
 /// What a node inherits from its ancestors.
@@ -90,6 +90,7 @@ struct Evaluator<'p, 's> {
     state: &'s RuntimeState,
     now: Time,
     items: Vec<DrawItem<'p>>,
+    nodes: BTreeMap<NodeId, scene::NodeState>,
 }
 
 impl<'p> Evaluator<'p, '_> {
@@ -186,14 +187,17 @@ impl<'p> Evaluator<'p, '_> {
                 props.set(*property, value);
             }
         }
-        if !props.visible {
-            return;
-        }
         let here = Inherited {
             transform: parent.transform * local_matrix(&props.transform),
             opacity: parent.opacity * props.opacity,
             color: compose(&props.color, &parent.color),
         };
+        if frame.path.is_empty() {
+            self.nodes.insert(id, scene::NodeState { props, world: here.transform });
+        }
+        if !props.visible {
+            return;
+        }
         let emit = |this: &mut Self, content| {
             this.items.push(DrawItem {
                 instance: frame.path.clone(),
@@ -531,5 +535,37 @@ mod tests {
         // whereas following "main" would have shown drawing 1.
         assert_eq!(eyes_drawing(s(155, 100)), 0);
         assert_eq!(evaluate(&p, &RuntimeState::default(), s(155, 100)).items.len(), 4);
+    }
+
+    #[test]
+    fn node_states_cover_the_compositions_own_nodes() {
+        let project = sample::bounce();
+        let scene = evaluate(&project, &RuntimeState::default(), Time::from_secs(2));
+        let stage = &project.compositions[&STAGE];
+        // Every node of the stage composition, groups included; none from
+        // inside the instances.
+        assert_eq!(
+            scene.nodes.keys().copied().collect::<Vec<_>>(),
+            stage.nodes.keys().copied().collect::<Vec<_>>()
+        );
+        assert!(!scene.nodes.contains_key(&BALL_BODY));
+        // The synced ball's X is keyed 120 → 260 over 4 s, eased in and out:
+        // half-way at 2 s.
+        let synced = scene.nodes[&SYNCED_BALL];
+        assert!((synced.props.transform.position.x - 190.0).abs() < 1e-3, "{:?}", synced.props);
+        // World = parent world × local.
+        let root = scene.nodes[&STAGE_ROOT].world;
+        assert_eq!(synced.world, root * local_matrix(&synced.props.transform));
+    }
+
+    #[test]
+    fn node_states_compose_through_groups() {
+        let mut project = sample::bounce();
+        let comp = project.compositions.get_mut(&STAGE).unwrap();
+        comp.nodes.get_mut(&STAGE_ROOT).unwrap().rest.transform.scale = Vec2::splat(2.0);
+        let scene = evaluate(&project, &RuntimeState::default(), Time::ZERO);
+        let ground = scene.nodes[&GROUND];
+        assert_eq!(ground.world.matrix2, Mat2::from_diagonal(Vec2::splat(2.0)), "scaled by its group");
+        assert_eq!(ground.props, project.compositions[&STAGE].nodes[&GROUND].rest, "its own props unscaled");
     }
 }

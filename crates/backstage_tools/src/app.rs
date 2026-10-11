@@ -14,8 +14,9 @@ use crate::timeline::{Playhead, Timeline, TimelineModel, TimelineMsg, TimelineOu
 use crate::tree;
 use crate::ui_driver::UiDriver;
 use crate::working_copy::{self, CommitError, SaveToError, WorkingCopy};
+use backstage_core::edit::{self, At};
 use backstage_core::{
-    Animation, Command, CompId, EditorPrefs, Entry, NodeId, NodeKind, Project, Time, TimeGrid,
+    Animation, Command, CompId, EditorPrefs, Entry, NodeId, NodeKind, Time, TimeGrid, Vec2,
 };
 use backstage_protocol::{Modifiers, PointerAt, PointerEvent, ToStage};
 use gtk::{gdk, gio, glib, prelude::*};
@@ -79,6 +80,9 @@ pub struct App {
     ui_driver: Option<UiDriver>,
     /// Smoke screenshots go here (`BACKSTAGE_UI_SHOTS`), numbered.
     shots: Option<(PathBuf, u32)>,
+    /// The primary button is held on the stage section: a drag there may be
+    /// in progress, which Escape cancels.
+    stage_held: bool,
     /// Where the stage sits in the stage section: stage point `p` is at
     /// `origin + p × scale` logical pixels (`ToTools::Framing`).
     stage_framing: Option<((f32, f32), f32)>,
@@ -127,7 +131,7 @@ pub enum AppMsg {
     Tick,
     Undo,
     Redo,
-    /// Debug edit until M4: move the first top-level node by this much.
+    /// Arrow keys: move the selection by this many stage pixels.
     Nudge(f32, f32),
     Timeline(TimelineOutput),
     /// Enter: play or pause the timeline.
@@ -135,8 +139,9 @@ pub enum AppMsg {
     Properties(PropertiesOutput),
     Layers(LayersOutput),
     Library(LibraryOutput),
-    /// Escape: select nothing.
-    Deselect,
+    /// Escape: cancel the drag on the stage, if one is held, or else
+    /// select nothing.
+    Escape,
     /// Smoke test: take a screenshot (the window has redrawn by now), then
     /// carry out the step.
     SmokeShot(&'static str, Option<SmokeStep>),
@@ -360,6 +365,7 @@ impl SimpleComponent for App {
             ui_driver,
             shots: std::env::var_os(SHOTS_ENV).map(|dir| (PathBuf::from(dir), 0)),
             stage_framing: None,
+            stage_held: false,
             status: "Stage starting…".into(),
             banner: None,
             frames_this_second: 0,
@@ -438,7 +444,14 @@ impl SimpleComponent for App {
             AppMsg::StageResized { width, height, scale } => {
                 self.supervisor.send(&ToStage::Resize { width, height, scale });
             }
-            AppMsg::Pointer(p) => self.supervisor.send(&ToStage::Pointer(p)),
+            AppMsg::Pointer(p) => {
+                match p {
+                    PointerEvent::Down(_) => self.stage_held = true,
+                    PointerEvent::Up(_) => self.stage_held = false,
+                    _ => {}
+                }
+                self.supervisor.send(&ToStage::Pointer(p));
+            }
             AppMsg::RestartStage => self.start_stage(&sender, true),
             AppMsg::AutoRestartStage => self.start_stage(&sender, false),
             AppMsg::KillStage => self.supervisor.kill(),
@@ -450,7 +463,8 @@ impl SimpleComponent for App {
             AppMsg::Properties(out) => self.on_properties(out),
             AppMsg::Layers(out) => self.on_layers(out),
             AppMsg::Library(out) => self.on_library(out),
-            AppMsg::Deselect => self.select(None),
+            AppMsg::Escape if self.stage_held => self.supervisor.send(&ToStage::CancelGesture),
+            AppMsg::Escape => self.select(None),
             AppMsg::SmokeShot(name, step) => {
                 self.smoke_shot(name);
                 self.run_smoke_step(step, &sender);
@@ -988,7 +1002,16 @@ impl App {
                     self.run_smoke_step(Some(SmokeStep::Fail(why)), sender);
                 }
             }
-            Some(SmokeStep::Nudge) => self.update_nudge(10.0, 0.0),
+            Some(SmokeStep::Nudge) => {
+                // Without real input: what Shift+Right does to the first node.
+                let first = self.copy.as_ref().and_then(|c| {
+                    let comp = c.document().project().compositions.get(&self.edited()?)?;
+                    comp.root_node()?.children.first().copied()
+                });
+                self.selection = first.into_iter().collect();
+                self.refresh_panels();
+                self.update_nudge(10.0, 0.0);
+            }
             Some(SmokeStep::Scrub(t)) => {
                 // The same path as dragging on the timeline.
                 self.on_timeline(TimelineOutput::Scrub(t));
@@ -1113,9 +1136,14 @@ impl App {
         }
     }
 
+    /// The arrow keys: moves the selection by (dx, dy) stage pixels, as a
+    /// drag on the stage would (keying what's animated, ADR 0006).
     fn update_nudge(&mut self, dx: f32, dy: f32) {
-        if let Some(entry) = self.copy.as_ref().and_then(|c| nudge_entry(c.document().project(), dx, dy)) {
-            self.submit(entry);
+        let (Some(copy), Some(comp)) = (&self.copy, self.edited()) else { return };
+        let at = At { anim: self.playhead.animation, clock: self.playhead.clock(Instant::now()) };
+        let project = copy.document().project();
+        if let Some(command) = edit::move_nodes(project, comp, &at, &self.selection, Vec2::new(dx, dy)) {
+            self.submit(Entry::Do(command));
         }
     }
 
@@ -1260,17 +1288,6 @@ impl App {
     }
 }
 
-/// Debug edit until M4: moves the first child of the root composition's
-/// root node (the ground in the sample) by `(dx, dy)` stage pixels.
-pub fn nudge_entry(project: &Project, dx: f32, dy: f32) -> Option<Entry> {
-    let comp = project.root_composition()?;
-    let node = *comp.root_node()?.children.first()?;
-    let mut rest = comp.nodes.get(&node)?.rest;
-    rest.transform.position.x += dx;
-    rest.transform.position.y += dy;
-    Some(Entry::Do(Command::SetRest { comp: comp.id, node, rest }))
-}
-
 /// Ctrl+Z / Ctrl+Shift+Z, Enter to play or pause, Escape to deselect, and
 /// the arrow keys for the debug nudge (10 px, or 1 px with Shift). Capture
 /// phase, so focused buttons don't swallow the arrows; but a text field or
@@ -1283,17 +1300,17 @@ fn shortcuts(sender: &ComponentSender<App>) -> gtk::ShortcutController {
         Redo,
         Nudge(f32, f32),
         TogglePlay,
-        Deselect,
+        Escape,
     }
     let mut bindings =
         vec![("<Control>z".to_owned(), Action::Undo), ("<Control><Shift>z".to_owned(), Action::Redo)];
     for key in ["Return", "KP_Enter"] {
         bindings.push((key.to_owned(), Action::TogglePlay));
     }
-    bindings.push(("Escape".to_owned(), Action::Deselect));
+    bindings.push(("Escape".to_owned(), Action::Escape));
     for (key, dx, dy) in [("Left", -1.0, 0.0), ("Right", 1.0, 0.0), ("Up", 0.0, -1.0), ("Down", 0.0, 1.0)] {
-        bindings.push((key.to_owned(), Action::Nudge(dx * 10.0, dy * 10.0)));
-        bindings.push((format!("<Shift>{key}"), Action::Nudge(dx, dy)));
+        bindings.push((key.to_owned(), Action::Nudge(dx, dy)));
+        bindings.push((format!("<Shift>{key}"), Action::Nudge(dx * 10.0, dy * 10.0)));
     }
 
     let controller = gtk::ShortcutController::new();
@@ -1309,7 +1326,7 @@ fn shortcuts(sender: &ComponentSender<App>) -> gtk::ShortcutController {
                 Action::Redo => AppMsg::Redo,
                 Action::Nudge(dx, dy) => AppMsg::Nudge(dx, dy),
                 Action::TogglePlay => AppMsg::TogglePlay,
-                Action::Deselect => AppMsg::Deselect,
+                Action::Escape => AppMsg::Escape,
             });
             glib::Propagation::Stop
         });
@@ -1394,33 +1411,11 @@ const CSS: &str = "
 
 #[cfg(test)]
 mod tests {
-    use super::{frame_rate, nudge_entry};
-    use backstage_core::sample::{self, ids::*};
-    use backstage_core::{Command, Entry, Props};
+    use super::frame_rate;
 
     #[test]
     fn no_frames_reads_as_idle() {
         assert_eq!(frame_rate(0), "idle");
         assert_eq!(frame_rate(60), "60 fps");
-    }
-
-    #[test]
-    fn nudge_moves_the_first_top_level_node_from_where_it_is() {
-        let mut project = sample::bounce();
-        let rest = |p: &backstage_core::Project| p.compositions[&STAGE].nodes[&GROUND].rest;
-        let start = rest(&project).transform.position;
-        let Some(Entry::Do(cmd @ Command::SetRest { comp: STAGE, node: GROUND, .. })) =
-            nudge_entry(&project, 10.0, -1.0)
-        else {
-            panic!("expected a SetRest on the ground")
-        };
-        cmd.apply(&mut project).unwrap();
-        let moved = rest(&project);
-        assert_eq!((moved.transform.position.x, moved.transform.position.y), (start.x + 10.0, start.y - 1.0));
-        assert_eq!(
-            Props { transform: rest(&sample::bounce()).transform, ..moved },
-            rest(&sample::bounce()),
-            "only the position changes"
-        );
     }
 }

@@ -7,6 +7,7 @@
 pub mod animation;
 pub mod command;
 pub mod document;
+pub mod edit;
 pub mod editor;
 pub mod eval;
 pub mod geom;
@@ -23,7 +24,8 @@ pub use animation::{Animation, Ease, EasePreset, Key, LoopMode, Marker, Property
 pub use command::{Command, CommandError};
 pub use document::{Document, Entry, EntryError, ReplayError};
 pub use eval::{
-    DrawContent, DrawItem, InstancePath, Layer, Mixer, RuntimeState, Scene, Weight, evaluate, evaluate_from,
+    DrawContent, DrawItem, InstancePath, Layer, Mixer, NodeState, RuntimeState, Scene, Weight, evaluate,
+    evaluate_from,
 };
 pub use geom::{Color, ColorTransform, Transform, Vec2};
 pub use id::{AnimId, AssetId, CompId, DrawingId, NodeId, ParseIdError};

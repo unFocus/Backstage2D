@@ -3,7 +3,7 @@
 //! (`BACKSTAGE_SMOKE=1`, see `src/smoke.rs`) under `backstage_uidriver`,
 //! which gives it real pointer and keyboard input: it waits for stage
 //! frames, clicks on the stage (the ground, Shift and a ball, empty stage)
-//! and drags a marquee, checking each selection, nudges, kills the stage once the edit is committed, checks the restarted
+//! and drags a marquee, checking each selection, drags the ground, kills the stage once the edit is committed, checks the restarted
 //! stage replayed it into the same document, saves (to a temporary copy of
 //! the sample project), undoes the edit on the new stage, and exits 0
 //! without cleaning up, like a crash. A second run in restore mode
@@ -80,13 +80,15 @@ fn edits_survive_stage_and_editor_crashes_in_the_real_editor() {
     ] {
         assert!(log.contains(&format!("smoke: {click} on stage")), "no {click:?}:\n{log}");
     }
-    assert!(log.contains("smoke: entered a composition and came back, nudging"), "no enter:\n{log}");
+    assert!(log.contains("smoke: entered a composition and came back, dragging"), "no enter:\n{log}");
     assert!(log.contains("smoke: saved, undoing"), "no save:\n{log}");
     assert!(log.contains(&format!("autosaving edits to {}", state.display())), "autosave is off:\n{log}");
-    // Saved after the nudge and before the undo.
+    // Saved after the drag (40 stage units right, through real input and
+    // the framing's rounding) and before the undo.
     let ground = |p: &backstage_core::Project| p.compositions[&STAGE].nodes[&GROUND].rest.transform.position;
     let (before, after) = (ground(&sample), ground(&saved.expect("loading the saved project")));
-    assert_eq!((after.x, after.y), (before.x + 10.0, before.y), "the nudge was saved");
+    let moved = after - before;
+    assert!((moved.x - 40.0).abs() < 1.5 && moved.y.abs() < 1.5, "the drag was saved: moved {moved}");
 
     // The first run exited without cleaning up, leaving the undo unsaved.
     let (passed, log) = run_editor("restore", &state, &project_dir, &shots);

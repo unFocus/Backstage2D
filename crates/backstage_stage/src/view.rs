@@ -32,7 +32,9 @@ pub fn editor_view<'p>(
         item.transform.translation += origin;
         items.push(item);
     }
-    (Scene { items }, outlines)
+    // Node states are left as evaluated: edits work on them in the
+    // composition's own space, where only deltas matter.
+    (Scene { items, nodes: scene.nodes }, outlines)
 }
 
 #[cfg(test)]

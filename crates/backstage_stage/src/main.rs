@@ -13,7 +13,8 @@ mod transport;
 mod view;
 
 use anyhow::{Context, Result, bail};
-use backstage_core::{Color, CompId, NodeId, Project, Scene, Vec2, evaluate_from};
+use backstage_core::edit::{self, At};
+use backstage_core::{Color, Command, CompId, Entry, NodeId, Project, Scene, Vec2, evaluate_from};
 use backstage_protocol::{
     FRAME_SLOTS, FrameRing, PROTOCOL_VERSION, PickMode, PointerAt, PointerEvent, ToStage, ToTools,
     read_message, write_message,
@@ -215,7 +216,13 @@ impl Stage {
                 self.dirty = true;
             }
             ToStage::Selection { comp, nodes } => {
-                self.selection = selection::Selection::set(comp, nodes);
+                let selection = selection::Selection::set(comp, nodes);
+                // The editor's echo of our own pick changes nothing; any
+                // other selection ends a move of the old one.
+                if selection != self.selection {
+                    self.cancel_move();
+                }
+                self.selection = selection;
                 self.dirty = true;
             }
             ToStage::Transport { composition, animation, time, playing } => {
@@ -225,6 +232,7 @@ impl Stage {
             }
             ToStage::Load { base, log } => match self.host.load(&base, &log) {
                 Ok(reply) => {
+                    self.gesture = None;
                     self.renderer.clear_cache();
                     self.dirty = true;
                     self.send(&reply)?;
@@ -243,6 +251,8 @@ impl Stage {
                     // removing nodes can move or reuse.
                     self.renderer.clear_cache();
                     self.dirty = true;
+                    // A move previews on the document as it was.
+                    self.cancel_move();
                 }
                 self.send(&reply)?;
             }
@@ -262,7 +272,20 @@ impl Stage {
                 if let Some(picked) = self.pick_on_press(&hit, at.modifiers.shift) {
                     self.send(&picked)?;
                 }
-                if hit.node.is_none() {
+                let selected =
+                    self.host.project().map(|p| self.selection.shown(p, hit.comp)).unwrap_or_default();
+                if let Some(node) = hit.node
+                    && selected.contains(&node)
+                {
+                    self.gesture = Some(Gesture::Move(Box::new(MoveDrag {
+                        comp: hit.comp,
+                        from: hit.point,
+                        nodes: selected,
+                        at: None,
+                        command: None,
+                        preview: None,
+                    })));
+                } else if hit.node.is_none() {
                     self.gesture = Some(Gesture::Marquee {
                         comp: hit.comp,
                         from: hit.point,
@@ -278,22 +301,50 @@ impl Stage {
             }
             PointerEvent::Move(at) => {
                 let Some(hit) = self.hit(at) else { return Ok(()) };
-                if let Some(Gesture::Marquee { from, to, deep, live, .. }) = &mut self.gesture {
-                    *to = hit.point;
-                    *deep = at.modifiers.ctrl;
-                    *live |= from.distance(*to) >= DRAG_THRESHOLD * hit.per_pixel;
+                match &mut self.gesture {
+                    Some(Gesture::Marquee { from, to, deep, live, .. }) => {
+                        *to = hit.point;
+                        *deep = at.modifiers.ctrl;
+                        *live |= from.distance(*to) >= DRAG_THRESHOLD * hit.per_pixel;
+                    }
+                    Some(Gesture::Move(drag)) => {
+                        // The playhead is taken when the drag goes live, so a
+                        // pause the press caused has arrived by then.
+                        if drag.at.is_none()
+                            && drag.from.distance(hit.point) >= DRAG_THRESHOLD * hit.per_pixel
+                        {
+                            drag.at = Some(self.transport.at(Instant::now()));
+                        }
+                        if let Some(document) = self.host.project() {
+                            drag.update(document, hit.point);
+                        }
+                    }
+                    None => {}
                 }
             }
             PointerEvent::Up(at) => {
                 self.held = false;
-                if let Some(Gesture::Marquee { comp, from, to, shift, deep, live: true }) =
-                    self.gesture.take()
-                    && let Some(picked) =
-                        self.pick_marquee(comp, Rect::around([from, to]).unwrap(), shift, deep)
-                {
-                    self.send(&picked)?;
+                match self.gesture.take() {
+                    Some(Gesture::Marquee { comp, from, to, shift, deep, live: true }) => {
+                        if let Some(picked) =
+                            self.pick_marquee(comp, Rect::around([from, to]).unwrap(), shift, deep)
+                        {
+                            self.send(&picked)?;
+                        }
+                    }
+                    Some(Gesture::Move(drag)) if drag.command.is_some() => {
+                        let command = drag.command.unwrap();
+                        // The stage is the document's only writer (ADR 0004):
+                        // it commits the drag itself, as one entry.
+                        let reply = match self.host.commit(&Entry::Do(command)) {
+                            Ok(committed) => committed,
+                            Err(e) => ToTools::Log(format!("the drag couldn't be committed: {e}")),
+                        };
+                        self.renderer.clear_cache();
+                        self.send(&reply)?;
+                    }
+                    _ => {}
                 }
-                self.gesture = None;
                 self.hover = self.hit(at).and_then(|hit| hit.node);
             }
             PointerEvent::Leave => self.hover = None,
@@ -301,10 +352,18 @@ impl Stage {
         Ok(())
     }
 
+    /// Drops a move in progress, and its preview.
+    fn cancel_move(&mut self) {
+        if matches!(self.gesture, Some(Gesture::Move(_))) {
+            self.gesture = None;
+            self.dirty = true;
+        }
+    }
+
     /// What's under the pointer, or `None` with nothing to pick from yet
     /// (no document or surface).
     fn hit(&self, at: PointerAt) -> Option<Hit> {
-        let project = self.host.project()?;
+        let project = shown_project(&self.gesture, &self.host)?;
         let framing = self.framing(project)?;
         let shown = Shown::now(project, &self.transport);
         let picker = pick::Picker::new(&project.compositions[&shown.comp]);
@@ -377,7 +436,8 @@ impl Stage {
                 self.framing_sent = Some(msg);
             }
         }
-        let (Some(t), Some(project)) = (self.target.as_mut(), self.host.project()) else { return Ok(()) };
+        let project = shown_project(&self.gesture, &self.host);
+        let (Some(t), Some(project)) = (self.target.as_mut(), project) else { return Ok(()) };
         let shown = Shown::now(project, &self.transport);
         let picker = pick::Picker::new(&project.compositions[&shown.comp]);
         let selected = self.selection.shown(project, shown.comp);
@@ -441,6 +501,56 @@ enum Gesture {
     /// `to`, once the pointer has moved far enough to be `live`. `shift`
     /// was held at the press (add, don't replace); `deep` is Ctrl now.
     Marquee { comp: CompId, from: Vec2, to: Vec2, shift: bool, deep: bool, live: bool },
+    /// Pressed on a selected node: moves the selection, once the pointer
+    /// has moved far enough.
+    /// (Boxed: it holds the preview project.)
+    Move(Box<MoveDrag>),
+}
+
+/// Dragging selected nodes: a live preview on a copy of the document,
+/// and the command to commit on release.
+struct MoveDrag {
+    comp: CompId,
+    /// Where the press was, in stage coordinates.
+    from: Vec2,
+    nodes: Vec<NodeId>,
+    /// The playhead the edit is made at, once the drag is live.
+    at: Option<At>,
+    /// What releasing commits: the move so far, if it changes anything.
+    command: Option<Command>,
+    preview: Option<Preview>,
+}
+
+/// The document with a drag's provisional command applied, and how to take
+/// it back off before applying the next one.
+struct Preview {
+    project: Project,
+    undo: Option<Command>,
+}
+
+impl MoveDrag {
+    /// The pointer is at `to`: rebuilds the command against `document` and
+    /// the preview, once live.
+    fn update(&mut self, document: &Project, to: Vec2) {
+        let Some(at) = self.at else { return };
+        self.command = edit::move_nodes(document, self.comp, &at, &self.nodes, to - self.from);
+        let preview = self.preview.get_or_insert_with(|| Preview { project: document.clone(), undo: None });
+        if let Some(undo) = preview.undo.take() {
+            undo.apply(&mut preview.project).expect("undoing the last preview step");
+        }
+        if let Some(command) = &self.command {
+            preview.undo = command.apply(&mut preview.project).ok();
+        }
+    }
+}
+
+/// What the stage shows: the drag's preview while a move is live, or the
+/// document.
+fn shown_project<'a>(gesture: &'a Option<Gesture>, host: &'a host::DocumentHost) -> Option<&'a Project> {
+    match gesture {
+        Some(Gesture::Move(drag)) if drag.preview.is_some() => drag.preview.as_ref().map(|p| &p.project),
+        _ => host.project(),
+    }
 }
 
 /// The edited composition as the editor shows it right now: the root

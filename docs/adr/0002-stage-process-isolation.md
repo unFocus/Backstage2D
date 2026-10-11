@@ -13,8 +13,9 @@
   playhead, edited composition) is owned by the tools process, and the
   stage keeps a mirror (`Transport`, `Selection`). Decision 1's
   "selection" below is superseded.
-- **Still to build:** the on-stage edit hooks (M4), and query hooks if
-  they turn out to be needed.
+- **M4:** the on-stage edit hooks are built: picking, marquee, and drags
+  that commit commands (see [ADR 0006](0006-on-stage-editing.md)).
+- **Still to build:** query hooks, if they turn out to be needed.
 
 ## Terms
 - **Stage (engine):** the `backstage_stage` process. It renders the display

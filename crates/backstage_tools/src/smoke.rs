@@ -77,6 +77,10 @@ const PICKS: [Pick; 4] = [
     },
 ];
 
+/// Where the smoke test drags the ground's middle (stage 275, 370) to: 40
+/// stage units right.
+pub const GROUND_DRAGGED_TO: Vec2 = Vec2::new(315.0, 370.0);
+
 /// What the app should do next.
 #[derive(Debug, PartialEq)]
 pub enum SmokeStep {
@@ -92,6 +96,7 @@ pub enum SmokeStep {
     Select,
     /// Enter the first instance's composition and come back out.
     Enter,
+    /// Nudge the selection (without the UI driver to drag with).
     Nudge,
     Save,
     Restore,
@@ -175,6 +180,9 @@ impl SmokeTest {
 
     /// A pick on the stage was applied; `selection` is the editor's now.
     pub fn picked(&mut self, selection: &[NodeId]) -> Option<SmokeStep> {
+        if self.phase == Phase::AwaitNudge {
+            return None; // The drag's press selects what it drags.
+        }
         let Phase::AwaitPick(i) = self.phase else {
             return Some(SmokeStep::Fail(format!("unexpected pick in phase {:?}", self.phase)));
         };
@@ -240,7 +248,7 @@ impl SmokeTest {
     pub fn committed(&mut self, seq: u64) -> Option<SmokeStep> {
         match (&self.phase, seq) {
             (Phase::AwaitNudge, 1) => {
-                eprintln!("smoke: nudge committed, killing stage");
+                eprintln!("smoke: the edit committed, killing stage");
                 self.phase = Phase::AwaitReplay;
                 Some(SmokeStep::Kill)
             }
@@ -280,6 +288,15 @@ impl SmokeTest {
     /// Entered a composition and came back; `ok` if both worked.
     pub fn entered(&mut self, ok: bool) -> Option<SmokeStep> {
         match (&self.phase, ok) {
+            (Phase::AwaitEnter, true) if self.stage_clicks => {
+                eprintln!("smoke: entered a composition and came back, dragging the ground");
+                self.phase = Phase::AwaitNudge;
+                Some(SmokeStep::StageInput {
+                    target: ClickTarget::Node(GROUND),
+                    drag_to: Some(ClickTarget::Stage(GROUND_DRAGGED_TO)),
+                    shift: false,
+                })
+            }
             (Phase::AwaitEnter, true) => {
                 eprintln!("smoke: entered a composition and came back, nudging");
                 self.phase = Phase::AwaitNudge;
@@ -412,6 +429,7 @@ mod tests {
         assert_eq!(smoke.scrubbed(), Some(SmokeStep::Select));
         assert_eq!(smoke.selected(true), Some(SmokeStep::Enter));
         assert_eq!(smoke.entered(true), Some(SmokeStep::Nudge));
+        assert_eq!(smoke.picked(&[GROUND]), None, "a drag's press may pick");
         assert_eq!(smoke.committed(1), Some(SmokeStep::Kill));
         // Frames still in flight from the killed stage don't count.
         assert_eq!(frames(&mut smoke, 1, FRAMES_PER_PHASE), []);

@@ -15,7 +15,7 @@
 //! - `click X Y [shift] [ctrl] [alt]`: move, press, and release, holding the
 //!   modifiers.
 //! - `key NAME down|up`: shift, ctrl, alt, escape, enter, delete, up, down,
-//!   left, right.
+//!   left, right, z.
 //! - `shot PATH`: capture the output as a PNG.
 //! - `wait MS`: pause (scripts).
 //!

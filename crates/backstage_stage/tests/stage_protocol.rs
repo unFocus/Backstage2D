@@ -688,3 +688,160 @@ fn a_marquee_is_drawn_while_dragging_and_can_be_cancelled() {
     stage.send(&ToStage::Pointer(PointerEvent::Up(at(Vec2::new(120.0, 120.0)))));
     assert_eq!(picks(&mut stage), [], "a cancelled marquee picks nothing");
 }
+
+/// The picks and commits the stage sent before answering a barrier: an
+/// entry always rejected (a redo could commit, after an undo).
+fn edits(stage: &mut StageHarness) -> Vec<ToTools> {
+    let never = Entry::Do(Command::RemoveNode { comp: ids::STAGE, node: ids::STAGE_ROOT });
+    stage.send(&ToStage::Submit { request: u64::MAX, entry: never });
+    let mut seen = Vec::new();
+    stage.recv_until(|m| match m {
+        ToTools::Picked { .. } | ToTools::Committed { .. } => {
+            seen.push(m.clone());
+            None
+        }
+        ToTools::Rejected { request: u64::MAX, .. } => Some(()),
+        _ => None,
+    });
+    seen
+}
+
+/// The single drag commit among `edits`.
+fn drag_commit(edits: &[ToTools]) -> Command {
+    let commits: Vec<_> = edits
+        .iter()
+        .filter_map(|m| match m {
+            ToTools::Committed { request: None, entry: Entry::Do(command), .. } => Some(command.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(commits.len(), 1, "{edits:?}");
+    commits[0].clone()
+}
+
+/// Waits (up to 5 s of frames) for the pixel at stage point `p` to satisfy
+/// `ok`.
+fn frames_show(stage: &mut StageHarness, p: backstage_core::Vec2, ok: impl Fn([u8; 4]) -> bool) -> bool {
+    let (x, y) = stage_to_view(VIEW, p);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if ok(stage.next_frame().pixel(x as u32, y as u32)) {
+            return true;
+        }
+    }
+    false
+}
+
+fn green(p: [u8; 4]) -> bool {
+    color_close(p, [0x6a as f32 / 255.0, 0xbf as f32 / 255.0, 0x4b as f32 / 255.0, 1.0])
+}
+
+fn press_and_move(stage: &mut StageHarness, from: backstage_core::Vec2, to: backstage_core::Vec2) {
+    let at = |p| {
+        let (x, y) = stage_to_view(VIEW, p);
+        PointerAt::new(x, y)
+    };
+    stage.send(&ToStage::Pointer(PointerEvent::Down(at(from))));
+    stage.send(&ToStage::Pointer(PointerEvent::Move(at(from.lerp(to, 0.5)))));
+    stage.send(&ToStage::Pointer(PointerEvent::Move(at(to))));
+}
+
+fn release(stage: &mut StageHarness, p: backstage_core::Vec2) {
+    let (x, y) = stage_to_view(VIEW, p);
+    stage.send(&ToStage::Pointer(PointerEvent::Up(PointerAt::new(x, y))));
+}
+
+#[test]
+fn dragging_a_node_commits_one_undoable_move() {
+    use backstage_core::Vec2;
+    use backstage_protocol::Modifiers;
+    let mut stage = ready_to_click();
+    let ground = centre_of(ids::GROUND);
+    drag(&mut stage, ground, ground + Vec2::new(30.0, 0.0), Modifiers::default());
+    let edits = edits(&mut stage);
+    assert!(matches!(&edits[0], ToTools::Picked { nodes, .. } if nodes == &[ids::GROUND]), "{edits:?}");
+    let command = drag_commit(&edits);
+    let Command::SetRest { node: ids::GROUND, rest, .. } = &command else { panic!("{command:?}") };
+    assert!(rest.transform.position.abs_diff_eq(Vec2::new(30.0, 0.0), 1e-2), "{rest:?}");
+
+    // One entry, so one undo takes it all back.
+    assert!(matches!(stage.submit(1, Entry::Undo), ToTools::Committed { .. }));
+    let undone = Document::replay(sample::bounce(), &[Entry::Do(command), Entry::Undo]).unwrap();
+    assert_eq!(undone.project(), &sample::bounce());
+
+    // A press and release without moving changes nothing.
+    click(&mut stage, ground, Modifiers::default());
+    assert_eq!(self::edits(&mut stage), [], "already selected, not moved");
+}
+
+/// The centre of what `node` draws at `secs` on the stage's main animation.
+fn centre_at(node: backstage_core::NodeId, secs: f64) -> backstage_core::Vec2 {
+    let project = sample::bounce();
+    let scene = backstage_core::evaluate(
+        &project,
+        &backstage_core::RuntimeState::default(),
+        Time::from_secs_f64(secs),
+    );
+    let b = scene
+        .items
+        .iter()
+        .filter(|i| i.node == node || i.instance.first() == Some(&node))
+        .filter_map(backstage_render::pick::item_bounds)
+        .reduce(backstage_render::pick::Rect::union)
+        .unwrap();
+    (b.min + b.max) / 2.0
+}
+
+#[test]
+fn dragging_an_animated_node_keys_it_at_the_playhead() {
+    use backstage_core::{Property, Vec2};
+    use backstage_protocol::Modifiers;
+    let mut stage = ready_to_click();
+    transport(&mut stage, None, 1.0, false);
+    // The synced ball's X is animated on `main`; its Y isn't.
+    let ball = centre_at(ids::SYNCED_BALL, 1.0);
+    drag(&mut stage, ball, ball + Vec2::new(20.0, 10.0), Modifiers::default());
+    let command = drag_commit(&edits(&mut stage));
+    let Command::Batch(parts) = &command else { panic!("{command:?}") };
+    assert!(
+        matches!(&parts[..], [
+            Command::SetKey { node: ids::SYNCED_BALL, property: Property::X, key, .. },
+            Command::SetRest { node: ids::SYNCED_BALL, .. },
+        ] if key.at == Time::from_secs(1)),
+        "a key for X at 1 s, the rest for Y: {parts:?}"
+    );
+}
+
+#[test]
+fn a_drag_previews_live_and_can_be_cancelled() {
+    use backstage_core::Vec2;
+    let mut stage = ready_to_click();
+    let ground = centre_of(ids::GROUND);
+    // 60 up, the strip (stage y 340..400) covers y 300. Off to the side,
+    // clear of the pointer's crosshair.
+    let above = Vec2::new(100.0, 300.0);
+    press_and_move(&mut stage, ground, ground - Vec2::new(0.0, 60.0));
+    assert!(frames_show(&mut stage, above, green), "the ground moved up, before any commit");
+    assert!(drag_commits(&edits(&mut stage)).is_empty(), "nothing committed while dragging");
+
+    stage.send(&ToStage::CancelGesture);
+    assert!(frames_show(&mut stage, above, |p| color_close(p, [1.0; 4])), "back in place");
+    release(&mut stage, ground - Vec2::new(0.0, 60.0));
+    assert!(drag_commits(&edits(&mut stage)).is_empty(), "a cancelled drag commits nothing");
+}
+
+#[test]
+fn an_edit_committed_mid_drag_cancels_it() {
+    use backstage_core::Vec2;
+    let mut stage = ready_to_click();
+    let ground = centre_of(ids::GROUND);
+    press_and_move(&mut stage, ground, ground + Vec2::new(40.0, 0.0));
+    assert!(matches!(stage.submit(1, set_background(Color::BLACK)), ToTools::Committed { .. }));
+    release(&mut stage, ground + Vec2::new(40.0, 0.0));
+    assert!(drag_commits(&edits(&mut stage)).is_empty(), "the drag was on the old document");
+}
+
+/// The stage's own commits among `edits`.
+fn drag_commits(edits: &[ToTools]) -> Vec<&ToTools> {
+    edits.iter().filter(|m| matches!(m, ToTools::Committed { request: None, .. })).collect()
+}
