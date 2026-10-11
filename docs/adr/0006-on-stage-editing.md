@@ -89,6 +89,44 @@ A move ends without committing on any of these:
 A `Transport` mid-drag doesn't cancel. The preview follows it, and the key
 time is already fixed.
 
+### Handles (M4 step 5)
+**One selected node** gets free-transform handles:
+- **The box:** the node's own bounds, measured in its own space, so it turns
+  and skews with the node. It's padded 2 logical pixels on screen.
+- **8 scale handles** at the corners and edge middles.
+- **Rotate zones** within 16 logical pixels outside the corners.
+- **The pivot** (registration point), drawn as a diamond.
+
+**Hit priority:** handle, then rotate zone, then the node (a move), then
+empty space (a marquee).
+
+**Scaling:**
+- `edit::scale_node` keeps the **opposite handle** fixed. Alt keeps the
+  pivot fixed instead.
+- The dragged handle follows the pointer.
+- The position compensates, so the anchor doesn't move.
+- An edge handle changes one axis. Shift on a corner keeps the aspect ratio.
+
+**Rotating:** `edit::rotate_node` turns about the pivot by the angle the
+pointer sweeps around it, and Shift snaps the result to 15°.
+
+Handle drags write X, Y, ScaleX, ScaleY, and Rotation through `set_values`,
+so they key animated properties like a move, with the same preview,
+commit, and cancellation.
+
+**Cursors:**
+- The stage reports `ToTools::Cursor(CursorKind)` for what's under the
+  pointer, only when it changes (protocol v9):
+  - **default** over nothing
+  - **pointer** over a node to pick
+  - **move** over a selected one
+  - a **resize arrow** along a handle's direction on screen, so it turns with
+    the node
+  - **crosshair** for rotate, since there's no standard rotate cursor
+- The editor sets it on the stage section.
+- The stage's own pointer crosshair, a debug aid since M0.5, is gone. The
+  latency probe now watches the hover box instead.
+
 ### Arrow keys
 They nudge the selection by 1 stage pixel, or 10 with Shift (Flash's
 convention). The editor does this with the same `edit::move_nodes`,

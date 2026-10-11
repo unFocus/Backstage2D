@@ -6,7 +6,7 @@ mod common;
 use backstage_core::sample::{self, ids};
 use backstage_core::{Color, Command, Document, Entry, ProjectSettings, Time};
 use backstage_protocol::{PointerAt, PointerEvent, Snapshot, ToStage, ToTools};
-use backstage_render::{CROSSHAIR, PASTEBOARD};
+use backstage_render::{HOVER, PASTEBOARD};
 use common::{StageHarness, color_close};
 use std::time::{Duration, Instant};
 
@@ -309,19 +309,29 @@ fn protocol_mismatch_is_an_error() {
 }
 
 #[test]
-fn pointer_draws_crosshair() {
-    let mut stage = StageHarness::spawn();
-    stage.handshake();
-    stage.load_sample();
-    resize(&mut stage, 320, 200);
-    stage.send(&move_to(40.0, 30.0));
+fn moving_onto_a_node_draws_its_hover_box() {
+    let mut stage = ready_to_click();
+    let (x, y) = stage_to_view(VIEW, centre_of(ids::GROUND));
+    stage.send(&move_to(x, y));
+    let (ex, ey) = hover_edge(VIEW);
     let deadline = Instant::now() + common::TIMEOUT;
     while Instant::now() < deadline {
-        if color_close(stage.next_frame().pixel(40, 30), CROSSHAIR) {
+        if hovered(stage.next_frame().pixel(ex, ey)) {
             return;
         }
     }
-    panic!("crosshair never appeared");
+    panic!("the hover box never appeared");
+}
+
+/// The pixel on the top edge of the ground's hover box (2 px above the
+/// strip, on white) in a `size` viewport at scale 1.
+fn hover_edge(size: (u32, u32)) -> (u32, u32) {
+    let (x, y) = stage_to_view(size, backstage_core::Vec2::new(275.0, 340.0));
+    (x as u32, (y - 2.0).floor() as u32)
+}
+
+fn hovered(pixel: [u8; 4]) -> bool {
+    color_close(pixel, mix(HOVER, [1.0; 4]))
 }
 
 fn move_to(x: f32, y: f32) -> ToStage {
@@ -332,27 +342,26 @@ fn move_to(x: f32, y: f32) -> ToStage {
 /// away, in one frame, without waiting for a tick.
 #[test]
 fn a_paused_stage_idles_until_input_arrives() {
-    let mut stage = StageHarness::spawn();
-    stage.handshake();
-    stage.load_sample();
-    resize(&mut stage, 320, 200);
-    transport(&mut stage, None, 0.0, false);
+    let mut stage = ready_to_click();
     // The barrier may leave one more frame in flight; let it land.
     stage.next_frame();
     stage.frames_for(Duration::from_millis(200));
     stage.assert_no_frame_for(Duration::from_millis(300));
 
-    stage.send(&move_to(40.0, 30.0));
-    assert!(color_close(stage.next_frame().pixel(40, 30), CROSSHAIR), "the move, in the next frame");
+    let (x, y) = stage_to_view(VIEW, centre_of(ids::GROUND));
+    let (ex, ey) = hover_edge(VIEW);
+    stage.send(&move_to(x, y));
+    assert!(hovered(stage.next_frame().pixel(ex, ey)), "the move, in the next frame");
     stage.assert_no_frame_for(Duration::from_millis(100));
 
     stage.send(&ToStage::Pointer(PointerEvent::Leave));
-    assert!(!color_close(stage.next_frame().pixel(40, 30), CROSSHAIR), "gone after Leave");
+    assert!(!hovered(stage.next_frame().pixel(ex, ey)), "gone after Leave");
     stage.assert_no_frame_for(Duration::from_millis(100));
 }
 
 /// Pointer → frame latency on the stage side: time from sending `Pointer`
-/// until a published frame shows the crosshair there. Excludes the GTK upload
+/// until a published frame shows its effect (the ground's hover box
+/// appearing or going). Excludes the GTK upload
 /// and compositor. Uses the real GPU unless BACKSTAGE_WGPU_FALLBACK=1.
 ///
 /// `cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture latency`
@@ -368,18 +377,23 @@ fn latency_probe() {
     transport(&mut stage, None, 0.0, false);
     stage.next_frame();
 
+    // Alternate onto the ground and off it, onto the pasteboard: its hover
+    // box comes and goes (picking and drawing both count).
+    let size = (1280, 720);
+    let ground = stage_to_view(size, centre_of(ids::GROUND));
+    let (ex, ey) = hover_edge(size);
     let mut samples = Vec::new();
     for i in 0..60u32 {
-        // Alternate between two spots on the pasteboard, clear of the stage.
-        let (x, y) = if i % 2 == 0 { (20.0, 20.0) } else { (1260.0, 700.0) };
+        let on = i % 2 == 0;
+        let (x, y) = if on { ground } else { (20.0, 20.0) };
         stage.send(&move_to(x, y));
         let sent = Instant::now();
         loop {
-            if color_close(stage.next_frame().pixel(x as u32, y as u32), CROSSHAIR) {
+            if hovered(stage.next_frame().pixel(ex, ey)) == on {
                 samples.push(sent.elapsed());
                 break;
             }
-            assert!(sent.elapsed() < Duration::from_secs(2), "crosshair never moved");
+            assert!(sent.elapsed() < Duration::from_secs(2), "the hover box never changed");
         }
     }
     samples.sort();
@@ -510,12 +524,12 @@ fn locked_nodes_let_clicks_through() {
     assert_eq!(picks(&mut stage), picked(vec![], PickMode::Replace), "nothing under the locked ground");
 }
 
-/// The pixel on the top edge of the box around stage rect `min..max`,
-/// drawn 2 px outside it.
+/// A pixel on the top edge of the box around stage rect `min..max`, drawn
+/// 2 px outside it: a quarter of the way along, clear of the handles.
 fn top_edge(min: backstage_core::Vec2, max: backstage_core::Vec2) -> (u32, u32) {
     let (x0, y0) = stage_to_view(VIEW, min);
     let (x1, _) = stage_to_view(VIEW, max);
-    (((x0 + x1) / 2.0) as u32, (y0 - 2.0).floor() as u32)
+    ((x0 + (x1 - x0) / 4.0) as u32, (y0 - 2.0).floor() as u32)
 }
 
 #[test]
@@ -844,4 +858,101 @@ fn an_edit_committed_mid_drag_cancels_it() {
 /// The stage's own commits among `edits`.
 fn drag_commits(edits: &[ToTools]) -> Vec<&ToTools> {
     edits.iter().filter(|m| matches!(m, ToTools::Committed { request: None, .. })).collect()
+}
+
+/// `node`'s handle box on the stage, for an unturned node: its bounds,
+/// padded 2 logical px as the stage draws it.
+fn handle_box(node: backstage_core::NodeId) -> backstage_render::pick::Rect {
+    let fit =
+        stage_to_view(VIEW, backstage_core::Vec2::X).0 - stage_to_view(VIEW, backstage_core::Vec2::ZERO).0;
+    let pad = backstage_core::Vec2::splat(2.0 / fit);
+    let b = bounds_of(node);
+    backstage_render::pick::Rect { min: b.min - pad, max: b.max + pad }
+}
+
+/// The node's rest transform after `command`.
+fn transform_after(command: &Command, node: backstage_core::NodeId) -> backstage_core::Transform {
+    let mut project = sample::bounce();
+    command.apply(&mut project).unwrap();
+    project.compositions[&ids::STAGE].nodes[&node].rest.transform
+}
+
+#[test]
+fn an_edge_handle_scales_one_axis_about_the_opposite_edge() {
+    use backstage_core::Vec2;
+    use backstage_protocol::Modifiers;
+    let mut stage = ready_to_click();
+    click(&mut stage, centre_of(ids::GROUND), Modifiers::default());
+    let b = handle_box(ids::GROUND);
+    let right = Vec2::new(b.max.x, (b.min.y + b.max.y) / 2.0);
+    drag(&mut stage, right, right + Vec2::new(50.0, 30.0), Modifiers::default());
+    let command = drag_commit(&edits(&mut stage));
+    let t = transform_after(&command, ids::GROUND);
+    let expected = (b.max.x + 50.0 - b.min.x) / (b.max.x - b.min.x);
+    assert!((t.scale.x - expected).abs() < 1e-3 && t.scale.y == 1.0, "only X: {t:?}");
+    // The left edge stays where it was.
+    let left = t.position.x + t.scale.x * b.min.x;
+    assert!((left - b.min.x).abs() < 1e-2, "left edge at {left}");
+}
+
+#[test]
+fn a_corner_with_shift_scales_evenly() {
+    use backstage_core::Vec2;
+    use backstage_protocol::Modifiers;
+    let shift = Modifiers { shift: true, ..Default::default() };
+    let mut stage = ready_to_click();
+    click(&mut stage, centre_of(ids::FREE_BALL), Modifiers::default());
+    let corner = handle_box(ids::FREE_BALL).max;
+    drag(&mut stage, corner, corner + Vec2::new(40.0, 10.0), shift);
+    let t = transform_after(&drag_commit(&edits(&mut stage)), ids::FREE_BALL);
+    assert!((t.scale.x - t.scale.y).abs() < 1e-5 && t.scale.x > 1.0, "{t:?}");
+}
+
+#[test]
+fn just_outside_a_corner_rotates_in_steps_with_shift() {
+    use backstage_core::Vec2;
+    use backstage_protocol::Modifiers;
+    let shift = Modifiers { shift: true, ..Default::default() };
+    let mut stage = ready_to_click();
+    click(&mut stage, centre_of(ids::FREE_BALL), Modifiers::default());
+    // Past the top-right corner, then swept around the pivot.
+    let b = handle_box(ids::FREE_BALL);
+    let outside = Vec2::new(b.max.x, b.min.y) + Vec2::new(8.0, -8.0);
+    drag(&mut stage, outside, outside + Vec2::new(40.0, 60.0), shift);
+    let t = transform_after(&drag_commit(&edits(&mut stage)), ids::FREE_BALL);
+    assert!(t.rotation != 0.0 && (t.rotation / 15.0).fract() == 0.0, "a multiple of 15: {}", t.rotation);
+    assert_eq!(
+        t.position,
+        sample::bounce().compositions[&ids::STAGE].nodes[&ids::FREE_BALL].rest.transform.position
+    );
+}
+
+/// The next `Cursor` the stage asks for.
+fn cursor(stage: &mut StageHarness) -> backstage_protocol::CursorKind {
+    stage.recv_until(|m| match m {
+        ToTools::Cursor(c) => Some(*c),
+        _ => None,
+    })
+}
+
+#[test]
+fn the_cursor_shows_what_a_press_would_do() {
+    use backstage_core::Vec2;
+    use backstage_protocol::{CursorKind, Modifiers};
+    let mut stage = ready_to_click();
+    let over = |stage: &mut StageHarness, p: Vec2| {
+        let (x, y) = stage_to_view(VIEW, p);
+        stage.send(&move_to(x, y));
+    };
+    over(&mut stage, centre_of(ids::FREE_BALL));
+    assert_eq!(cursor(&mut stage), CursorKind::Pointer, "a node to pick");
+    click(&mut stage, centre_of(ids::FREE_BALL), Modifiers::default());
+    over(&mut stage, centre_of(ids::FREE_BALL) + Vec2::new(1.0, 0.0));
+    assert_eq!(cursor(&mut stage), CursorKind::Move, "selected: a press moves it");
+    over(&mut stage, handle_box(ids::FREE_BALL).min);
+    assert_eq!(cursor(&mut stage), CursorKind::ResizeNwse, "the top-left handle");
+    over(&mut stage, handle_box(ids::FREE_BALL).min - Vec2::splat(8.0));
+    assert_eq!(cursor(&mut stage), CursorKind::Rotate, "past the corner");
+    over(&mut stage, Vec2::new(10.0, 10.0));
+    assert_eq!(cursor(&mut stage), CursorKind::Default);
 }

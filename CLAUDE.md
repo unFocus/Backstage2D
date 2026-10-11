@@ -62,13 +62,17 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
   - Clicking empty space clears the selection. Dragging from there draws a
     marquee that selects what it touches (Shift adds).
   - Locked nodes can't be picked.
+  - One selected node gets handles: scale (Shift keeps the ratio, Alt
+    scales about the pivot) and rotate just outside the corners (Shift
+    snaps to 15°). The stage sends `ToTools::Cursor`, and the editor sets
+    it (protocol v9).
   - Dragging a selected node moves the whole selection. `edit::move_nodes`
     keys animated properties at the playhead and sets rest values for the
     rest. The stage commits the drag itself (`Committed { request: None }`).
   - The stage applies a pick at once and reports `ToTools::Picked`; the
     editor echoes `Selection`.
 - The stage reports where it sits in the stage section with
-  `ToTools::Framing` (logical pixels, protocol v8).
+  `ToTools::Framing` (logical pixels).
 - Double-clicking a composition in the Library, or an
   instance in Layers, edits that composition; the breadcrumb over the
   stage goes back.

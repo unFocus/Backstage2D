@@ -6,6 +6,7 @@
 //! document arrives with `Load`; the stage is its only writer (see
 //! [`host`]). See `docs/adr/0002-stage-process-isolation.md`.
 
+mod handles;
 mod host;
 mod pick;
 mod selection;
@@ -16,14 +17,15 @@ use anyhow::{Context, Result, bail};
 use backstage_core::edit::{self, At};
 use backstage_core::{Color, Command, CompId, Entry, NodeId, Project, Scene, Vec2, evaluate_from};
 use backstage_protocol::{
-    FRAME_SLOTS, FrameRing, PROTOCOL_VERSION, PickMode, PointerAt, PointerEvent, ToStage, ToTools,
-    read_message, write_message,
+    CursorKind, FRAME_SLOTS, FrameRing, Modifiers, PROTOCOL_VERSION, PickMode, PointerAt, PointerEvent,
+    ToStage, ToTools, read_message, write_message,
 };
 use backstage_render::pick::Rect;
 use backstage_render::{
     Frame, Framing, HOVER, HeadlessGpu, MARQUEE, OFFSCREEN_FORMAT, OffscreenTarget, Overlay, Presentation,
     Renderer, SELECTION, frame_stage,
 };
+use handles::{Grip, Handles};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -36,6 +38,8 @@ const PICK_SLOP: f32 = 3.0;
 /// How far the pointer moves, in logical pixels, before a press on empty
 /// space becomes a marquee rather than a click.
 const DRAG_THRESHOLD: f32 = 3.0;
+/// Shift rotates in steps of this many degrees.
+const ROTATE_SNAP: f32 = 15.0;
 /// Selection and hover boxes sit this far outside the bounds, in logical
 /// pixels, so they stay visible on edges shared with the stage.
 const BOX_OUTSET: f32 = 2.0;
@@ -138,14 +142,14 @@ struct Stage {
     generation: u64,
     seq: u64,
     scale: f64,
-    /// Where the pointer is over the stage section, in logical pixels.
-    pointer: Option<(f32, f32)>,
     /// The primary button is down (between `Down` and `Up`).
     held: bool,
     /// The node a click would pick right now (stage state, ADR 0005).
     hover: Option<NodeId>,
     /// The press-drag-release in progress, if any (stage state).
     gesture: Option<Gesture>,
+    /// The cursor the editor was last asked for.
+    cursor: CursorKind,
     transport: transport::Transport,
     /// The editor's selection (ADR 0005), changed here first by picks.
     selection: selection::Selection,
@@ -167,10 +171,10 @@ impl Stage {
             generation: 0,
             seq: 0,
             scale: 1.0,
-            pointer: None,
             held: false,
             hover: None,
             gesture: None,
+            cursor: CursorKind::Default,
             transport: transport::Transport::new(Instant::now()),
             selection: selection::Selection::default(),
             dirty: true,
@@ -220,7 +224,7 @@ impl Stage {
                 // The editor's echo of our own pick changes nothing; any
                 // other selection ends a move of the old one.
                 if selection != self.selection {
-                    self.cancel_move();
+                    self.cancel_edit();
                 }
                 self.selection = selection;
                 self.dirty = true;
@@ -252,7 +256,7 @@ impl Stage {
                     self.renderer.clear_cache();
                     self.dirty = true;
                     // A move previews on the document as it was.
-                    self.cancel_move();
+                    self.cancel_edit();
                 }
                 self.send(&reply)?;
             }
@@ -262,13 +266,34 @@ impl Stage {
     }
 
     fn on_pointer(&mut self, event: PointerEvent) -> Result<()> {
-        self.pointer = event.at().map(|at| (at.x, at.y));
         self.dirty = true;
         match event {
             PointerEvent::Down(at) => {
                 self.held = true;
                 self.hover = None;
                 let Some(hit) = self.hit(at) else { return Ok(()) };
+                // The handles come before what's under them.
+                if let Some((handles, node)) = self.single_handles()
+                    && let Some(grip) = handles.grip_at(self.screen(at), hit.view, self.scale as f32)
+                {
+                    let kind = match grip {
+                        Grip::Scale { handle, anchor, corner, .. } => {
+                            DragKind::Scale { node, handle, anchor, pivot: handles.pivot, corner }
+                        }
+                        Grip::Rotate => DragKind::Rotate { node },
+                    };
+                    self.gesture = Some(Gesture::Edit(Box::new(EditDrag {
+                        comp: hit.comp,
+                        kind,
+                        from: hit.point,
+                        origin: hit.origin,
+                        nodes: vec![node],
+                        at: None,
+                        command: None,
+                        preview: None,
+                    })));
+                    return Ok(());
+                }
                 if let Some(picked) = self.pick_on_press(&hit, at.modifiers.shift) {
                     self.send(&picked)?;
                 }
@@ -277,9 +302,11 @@ impl Stage {
                 if let Some(node) = hit.node
                     && selected.contains(&node)
                 {
-                    self.gesture = Some(Gesture::Move(Box::new(MoveDrag {
+                    self.gesture = Some(Gesture::Edit(Box::new(EditDrag {
                         comp: hit.comp,
+                        kind: DragKind::Move,
                         from: hit.point,
+                        origin: hit.origin,
                         nodes: selected,
                         at: None,
                         command: None,
@@ -298,6 +325,7 @@ impl Stage {
             }
             PointerEvent::Move(at) if !self.held => {
                 self.hover = self.hit(at).and_then(|hit| hit.node);
+                self.update_cursor(at)?;
             }
             PointerEvent::Move(at) => {
                 let Some(hit) = self.hit(at) else { return Ok(()) };
@@ -307,7 +335,7 @@ impl Stage {
                         *deep = at.modifiers.ctrl;
                         *live |= from.distance(*to) >= DRAG_THRESHOLD * hit.per_pixel;
                     }
-                    Some(Gesture::Move(drag)) => {
+                    Some(Gesture::Edit(drag)) => {
                         // The playhead is taken when the drag goes live, so a
                         // pause the press caused has arrived by then.
                         if drag.at.is_none()
@@ -316,7 +344,7 @@ impl Stage {
                             drag.at = Some(self.transport.at(Instant::now()));
                         }
                         if let Some(document) = self.host.project() {
-                            drag.update(document, hit.point);
+                            drag.update(document, hit.point, at.modifiers);
                         }
                     }
                     None => {}
@@ -332,7 +360,7 @@ impl Stage {
                             self.send(&picked)?;
                         }
                     }
-                    Some(Gesture::Move(drag)) if drag.command.is_some() => {
+                    Some(Gesture::Edit(drag)) if drag.command.is_some() => {
                         let command = drag.command.unwrap();
                         // The stage is the document's only writer (ADR 0004):
                         // it commits the drag itself, as one entry.
@@ -346,15 +374,54 @@ impl Stage {
                     _ => {}
                 }
                 self.hover = self.hit(at).and_then(|hit| hit.node);
+                self.update_cursor(at)?;
             }
             PointerEvent::Leave => self.hover = None,
         }
         Ok(())
     }
 
-    /// Drops a move in progress, and its preview.
-    fn cancel_move(&mut self) {
-        if matches!(self.gesture, Some(Gesture::Move(_))) {
+    /// The pointer in physical pixels of the surface.
+    fn screen(&self, at: PointerAt) -> Vec2 {
+        Vec2::new(at.x, at.y) * self.scale as f32
+    }
+
+    /// The handles of the selection, when exactly one node is selected and
+    /// it draws something: they're measured in its own space.
+    fn single_handles(&self) -> Option<(Handles, NodeId)> {
+        let project = shown_project(&self.gesture, &self.host)?;
+        let shown = Shown::now(project, &self.transport);
+        let [node] = self.selection.shown(project, shown.comp)[..] else { return None };
+        let picker = pick::Picker::new(&project.compositions[&shown.comp]);
+        let view = self.framing(project)?.view;
+        Some((handles_for(&picker, &shown.scene, node, view, self.scale as f32)?, node))
+    }
+
+    /// Tells the editor which cursor to show for what's under the pointer,
+    /// if that changed: a handle's, or whether a press would move or pick.
+    fn update_cursor(&mut self, at: PointerAt) -> Result<()> {
+        let Some(hit) = self.hit(at) else { return Ok(()) };
+        let grip = self.single_handles().and_then(|(handles, _)| {
+            let grip = handles.grip_at(self.screen(at), hit.view, self.scale as f32)?;
+            Some(handles.cursor(grip, hit.view))
+        });
+        let selected = self.host.project().map(|p| self.selection.shown(p, hit.comp)).unwrap_or_default();
+        let cursor = match (grip, hit.node) {
+            (Some(cursor), _) => cursor,
+            (None, Some(node)) if selected.contains(&node) => CursorKind::Move,
+            (None, Some(_)) => CursorKind::Pointer,
+            (None, None) => CursorKind::Default,
+        };
+        if cursor != self.cursor {
+            self.cursor = cursor;
+            self.send(&ToTools::Cursor(cursor))?;
+        }
+        Ok(())
+    }
+
+    /// Drops a move, scale, or rotate in progress, and its preview.
+    fn cancel_edit(&mut self) {
+        if matches!(self.gesture, Some(Gesture::Edit(_))) {
             self.gesture = None;
             self.dirty = true;
         }
@@ -371,7 +438,8 @@ impl Stage {
         // The view maps stage units to physical pixels.
         let per_pixel = self.scale as f32 / framing.view.matrix2.x_axis.x;
         let node = picker.pick(&shown.scene, point, at.modifiers.ctrl, PICK_SLOP * per_pixel);
-        Some(Hit { comp: shown.comp, node, point, per_pixel })
+        let origin = shown.origin.unwrap_or(Vec2::ZERO);
+        Some(Hit { comp: shown.comp, node, point, per_pixel, view: framing.view, origin })
     }
 
     /// A press picks (ADR 0005): the stage changes its mirror at once and
@@ -454,11 +522,28 @@ impl Stage {
         };
         let hovered = preview.into_iter().filter(|n| !selected.contains(n));
         let marks = selected.iter().map(|&n| (n, SELECTION)).chain(hovered.map(|n| (n, HOVER)));
-        let mut overlay: Vec<Overlay> = marks
+        // One selected node gets its handles instead of a box.
+        let view = frame_stage(
+            t.offscreen.size(),
+            (project.settings.stage_width as f32, project.settings.stage_height as f32),
+            self.scale as f32,
+            Presentation::Editor,
+            project.settings.pixel_art,
+        )
+        .view;
+        let single = match selected[..] {
+            [node] => handles_for(&picker, &shown.scene, node, view, self.scale as f32),
+            _ => None,
+        };
+        let boxed = marks.filter(|(n, color)| !(single.is_some() && *color == SELECTION && selected == [*n]));
+        let mut overlay: Vec<Overlay> = boxed
             .filter_map(|(n, color)| {
                 Some(Overlay::Box { rect: picker.bounds(&shown.scene, n)?, color, outset: BOX_OUTSET })
             })
             .collect();
+        if let Some(handles) = &single {
+            overlay.extend(handles.overlay());
+        }
         if let Some((rect, _)) = marquee {
             overlay.push(Overlay::Fill { rect, color: MARQUEE });
             overlay.push(Overlay::Box { rect, color: SELECTION, outset: 0.0 });
@@ -467,7 +552,6 @@ impl Stage {
             project,
             scene: &shown.scene,
             scale: self.scale as f32,
-            pointer: self.pointer,
             presentation: Presentation::Editor,
             outlines: &shown.outlines,
             origin_marker: shown.origin,
@@ -492,6 +576,11 @@ struct Hit {
     point: Vec2,
     /// Stage units per logical pixel.
     per_pixel: f32,
+    /// Stage coordinates to physical pixels.
+    view: glam::Affine2,
+    /// Where the shown composition's origin is drawn (not at the top-left
+    /// corner when the editor entered a composition).
+    origin: Vec2,
 }
 
 /// A press-drag-release in progress on the stage. Stage state (ADR 0005):
@@ -501,18 +590,22 @@ enum Gesture {
     /// `to`, once the pointer has moved far enough to be `live`. `shift`
     /// was held at the press (add, don't replace); `deep` is Ctrl now.
     Marquee { comp: CompId, from: Vec2, to: Vec2, shift: bool, deep: bool, live: bool },
-    /// Pressed on a selected node: moves the selection, once the pointer
-    /// has moved far enough.
-    /// (Boxed: it holds the preview project.)
-    Move(Box<MoveDrag>),
+    /// Pressed on a selected node (moves the selection) or on one of its
+    /// handles (scales or rotates it), once the pointer has moved far
+    /// enough. Boxed: it holds the preview project.
+    Edit(Box<EditDrag>),
 }
 
-/// Dragging selected nodes: a live preview on a copy of the document,
-/// and the command to commit on release.
-struct MoveDrag {
+/// Dragging selected nodes or their handles: a live preview on a copy of
+/// the document, and the command to commit on release.
+struct EditDrag {
     comp: CompId,
+    kind: DragKind,
     /// Where the press was, in stage coordinates.
     from: Vec2,
+    /// Where the composition's origin is drawn: subtracted from stage
+    /// points to get the composition's own coordinates.
+    origin: Vec2,
     nodes: Vec<NodeId>,
     /// The playhead the edit is made at, once the drag is live.
     at: Option<At>,
@@ -528,12 +621,36 @@ struct Preview {
     undo: Option<Command>,
 }
 
-impl MoveDrag {
-    /// The pointer is at `to`: rebuilds the command against `document` and
-    /// the preview, once live.
-    fn update(&mut self, document: &Project, to: Vec2) {
+/// What an edit drag does.
+enum DragKind {
+    /// The whole selection follows the pointer.
+    Move,
+    /// A scale handle: `handle` follows the pointer while `anchor` (the
+    /// opposite handle; Alt: the pivot) stays. Shift keeps a corner's aspect.
+    /// All in the node's own space.
+    Scale { node: NodeId, handle: Vec2, anchor: Vec2, pivot: Vec2, corner: bool },
+    /// A rotate zone: turns about the pivot (Shift: in 15° steps).
+    Rotate { node: NodeId },
+}
+
+impl EditDrag {
+    /// The pointer is at `to` with `modifiers` held: rebuilds the command
+    /// against `document` and the preview, once live.
+    fn update(&mut self, document: &Project, to: Vec2, modifiers: Modifiers) {
         let Some(at) = self.at else { return };
-        self.command = edit::move_nodes(document, self.comp, &at, &self.nodes, to - self.from);
+        let (from, to_local) = (self.from - self.origin, to - self.origin);
+        self.command = match self.kind {
+            DragKind::Move => edit::move_nodes(document, self.comp, &at, &self.nodes, to - self.from),
+            DragKind::Scale { node, handle, anchor, pivot, corner } => {
+                let anchor = if modifiers.alt { pivot } else { anchor };
+                let uniform = modifiers.shift && corner;
+                edit::scale_node(document, self.comp, &at, node, handle, anchor, to_local, uniform)
+            }
+            DragKind::Rotate { node } => {
+                let snap = modifiers.shift.then_some(ROTATE_SNAP);
+                edit::rotate_node(document, self.comp, &at, node, from, to_local, snap)
+            }
+        };
         let preview = self.preview.get_or_insert_with(|| Preview { project: document.clone(), undo: None });
         if let Some(undo) = preview.undo.take() {
             undo.apply(&mut preview.project).expect("undoing the last preview step");
@@ -544,11 +661,32 @@ impl MoveDrag {
     }
 }
 
+/// The handles for `node`: its box in its own space, padded by
+/// `BOX_OUTSET` logical pixels on screen (so it clears edges it shares with
+/// the stage), its world transform, and its pivot. `view` maps the stage to
+/// physical pixels, `scale` of them per logical pixel.
+fn handles_for(
+    picker: &pick::Picker,
+    scene: &Scene,
+    node: NodeId,
+    view: glam::Affine2,
+    scale: f32,
+) -> Option<Handles> {
+    let local = picker.local_bounds(scene, node)?;
+    let state = scene.nodes.get(&node)?;
+    // Physical pixels per local unit, along each of the node's axes.
+    let m = (view * state.world).matrix2;
+    let per_unit = Vec2::new(m.x_axis.length(), m.y_axis.length()).max(Vec2::splat(1e-6));
+    let pad = Vec2::splat(BOX_OUTSET * scale) / per_unit;
+    let local = Rect { min: local.min - pad, max: local.max + pad };
+    Some(Handles { local, world: state.world, pivot: state.props.transform.pivot })
+}
+
 /// What the stage shows: the drag's preview while a move is live, or the
 /// document.
 fn shown_project<'a>(gesture: &'a Option<Gesture>, host: &'a host::DocumentHost) -> Option<&'a Project> {
     match gesture {
-        Some(Gesture::Move(drag)) if drag.preview.is_some() => drag.preview.as_ref().map(|p| &p.project),
+        Some(Gesture::Edit(drag)) if drag.preview.is_some() => drag.preview.as_ref().map(|p| &p.project),
         _ => host.project(),
     }
 }

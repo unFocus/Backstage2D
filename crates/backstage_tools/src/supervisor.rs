@@ -5,7 +5,7 @@
 
 use backstage_core::{CompId, Entry, NodeId};
 use backstage_protocol::{
-    FrameRing, PROTOCOL_VERSION, PickMode, ToStage, ToTools, read_message, write_message,
+    CursorKind, FrameRing, PROTOCOL_VERSION, PickMode, ToStage, ToTools, read_message, write_message,
 };
 use gtk::glib;
 use relm4::gtk;
@@ -56,6 +56,8 @@ pub enum StageEvent {
         origin: (f32, f32),
         scale: f32,
     },
+    /// The cursor the stage wants: see `ToTools::Cursor`.
+    Cursor(CursorKind),
     /// Nodes picked on the stage: see `ToTools::Picked`.
     Picked {
         comp: CompId,
@@ -261,6 +263,7 @@ fn run_session(
             ToTools::Rejected { request, reason } => emit(StageEvent::Rejected { request, reason }),
             ToTools::Picked { comp, nodes, mode } => emit(StageEvent::Picked { comp, nodes, mode }),
             ToTools::Framing { origin, scale } => emit(StageEvent::Framing { origin, scale }),
+            ToTools::Cursor(cursor) => emit(StageEvent::Cursor(cursor)),
         }
     }
 }

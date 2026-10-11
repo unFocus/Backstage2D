@@ -32,9 +32,12 @@ pub fn editor_view<'p>(
         item.transform.translation += origin;
         items.push(item);
     }
-    // Node states are left as evaluated: edits work on them in the
-    // composition's own space, where only deltas matter.
-    (Scene { items, nodes: scene.nodes }, outlines)
+    // Node states move too, so boxes measured against them line up.
+    let mut nodes = scene.nodes;
+    for state in nodes.values_mut() {
+        state.world.translation += origin;
+    }
+    (Scene { items, nodes }, outlines)
 }
 
 #[cfg(test)]

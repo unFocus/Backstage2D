@@ -22,18 +22,12 @@ const CHANNEL_TOLERANCE: u8 = 2;
 const MAX_BAD_PIXELS: usize = 16;
 
 /// Renders the sample at `at` into a `size` image.
-fn render(size: (u32, u32), at: Time, scale: f32, pointer: Option<(f32, f32)>) -> RgbaImage {
-    render_as(Presentation::Editor, size, at, scale, pointer)
+fn render(size: (u32, u32), at: Time, scale: f32) -> RgbaImage {
+    render_as(Presentation::Editor, size, at, scale)
 }
 
-fn render_as(
-    presentation: Presentation,
-    size: (u32, u32),
-    at: Time,
-    scale: f32,
-    pointer: Option<(f32, f32)>,
-) -> RgbaImage {
-    render_with(presentation, size, at, scale, pointer, |_| None, |_| Vec::new())
+fn render_as(presentation: Presentation, size: (u32, u32), at: Time, scale: f32) -> RgbaImage {
+    render_with(presentation, size, at, scale, |_| None, |_| Vec::new())
 }
 
 /// `outline` picks each item's outline colour, and `overlay` the marks
@@ -43,7 +37,18 @@ fn render_with(
     size: (u32, u32),
     at: Time,
     scale: f32,
-    pointer: Option<(f32, f32)>,
+    outline: impl Fn(&backstage_core::DrawItem) -> Option<backstage_core::Color>,
+    overlay: impl Fn(&backstage_core::Scene) -> Vec<Overlay>,
+) -> RgbaImage {
+    render_project(&sample::bounce(), presentation, size, at, scale, outline, overlay)
+}
+
+fn render_project(
+    project: &backstage_core::Project,
+    presentation: Presentation,
+    size: (u32, u32),
+    at: Time,
+    scale: f32,
     outline: impl Fn(&backstage_core::DrawItem) -> Option<backstage_core::Color>,
     overlay: impl Fn(&backstage_core::Scene) -> Vec<Overlay>,
 ) -> RgbaImage {
@@ -52,15 +57,13 @@ fn render_with(
     let gpu = pollster::block_on(HeadlessGpu::new("golden test")).expect("software adapter (lavapipe)");
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut target = OffscreenTarget::new(&gpu.device, size);
-    let project = sample::bounce();
-    let scene = evaluate(&project, &RuntimeState::default(), at);
+    let scene = evaluate(project, &RuntimeState::default(), at);
     let outlines: Vec<_> = scene.items.iter().map(outline).collect();
     let overlay = overlay(&scene);
     let frame = Frame {
-        project: &project,
+        project,
         scene: &scene,
         scale,
-        pointer,
         presentation,
         outlines: &outlines,
         origin_marker: None,
@@ -126,18 +129,18 @@ fn secs(num: i64, den: i64) -> Time {
 
 #[test]
 fn sample_at_start() {
-    check("sample_t0_550x400_1x", render((550, 400), Time::ZERO, 1.0, None));
+    check("sample_t0_550x400_1x", render((550, 400), Time::ZERO, 1.0));
 }
 
 #[test]
-fn sample_mid_bounce_at_1_5x_with_pointer() {
-    check("sample_t0_5_800x600_1_5x_pointer", render((800, 600), secs(1, 2), 1.5, Some((120.0, 80.0))));
+fn sample_mid_bounce_at_1_5x() {
+    check("sample_t0_5_800x600_1_5x", render((800, 600), secs(1, 2), 1.5));
 }
 
 #[test]
 fn sample_blink() {
     // At 1.6 s the eye flipbook shows its closed drawing.
-    check("sample_t1_6_blink_550x400_1x", render((550, 400), secs(8, 5), 1.0, None));
+    check("sample_t1_6_blink_550x400_1x", render((550, 400), secs(8, 5), 1.0));
 }
 
 #[test]
@@ -148,7 +151,6 @@ fn ground_and_free_ball_outlined() {
         (550, 400),
         Time::ZERO,
         1.0,
-        None,
         |item| {
             if item.node == ids::GROUND {
                 Some(Color::rgb8(0x2f, 0x6f, 0xff))
@@ -204,19 +206,60 @@ fn bounds(
 
 /// The sample at time zero in the editor, with `marks` drawn over it.
 fn render_editor_marks(marks: impl Fn(&backstage_core::Scene) -> Vec<Overlay>) -> RgbaImage {
-    render_with(Presentation::Editor, (550, 400), Time::ZERO, 1.0, None, |_| None, marks)
+    render_with(Presentation::Editor, (550, 400), Time::ZERO, 1.0, |_| None, marks)
 }
 
 #[test]
 fn tiny_viewport() {
-    check("tiny_64x64", render((64, 64), Time::ZERO, 1.0, None));
+    check("tiny_64x64", render((64, 64), Time::ZERO, 1.0));
 }
 
 #[test]
 fn sample_in_the_player() {
     // Stage fills the window between black bars; no shadow, no crosshair.
-    check(
-        "sample_player_t0_800x600",
-        render_as(Presentation::Player, (800, 600), Time::ZERO, 1.0, Some((10.0, 10.0))),
+    check("sample_player_t0_800x600", render_as(Presentation::Player, (800, 600), Time::ZERO, 1.0));
+}
+
+#[test]
+fn handles_on_a_rotated_node() {
+    use backstage_core::sample::ids;
+    use backstage_core::{Vec2, evaluate};
+    use backstage_render::pick::{Rect, item_bounds_in};
+    use backstage_render::{HandleKind, SELECTION};
+    // The free ball turned 30° and stretched: its box turns with it.
+    let mut project = sample::bounce();
+    let ball = project.compositions.get_mut(&ids::STAGE).unwrap().nodes.get_mut(&ids::FREE_BALL).unwrap();
+    ball.rest.transform.rotation = 30.0;
+    ball.rest.transform.scale = Vec2::new(1.6, 1.0);
+    let scene = evaluate(&project, &RuntimeState::default(), Time::ZERO);
+    let world = scene.nodes[&ids::FREE_BALL].world;
+    let local = scene
+        .items
+        .iter()
+        .filter(|i| i.instance.first() == Some(&ids::FREE_BALL))
+        .filter_map(|i| item_bounds_in(i, world.inverse()))
+        .reduce(Rect::union)
+        .unwrap();
+    let corners = local.corners().map(|c| world.transform_point2(c));
+    let image = render_project(
+        &project,
+        Presentation::Editor,
+        (550, 400),
+        Time::ZERO,
+        1.0,
+        |_| None,
+        |_| {
+            let mut marks = vec![Overlay::Outline { corners, color: SELECTION }];
+            for i in 0..4 {
+                marks.push(Overlay::Handle { at: corners[i], kind: HandleKind::Square });
+                marks.push(Overlay::Handle {
+                    at: (corners[i] + corners[(i + 1) % 4]) / 2.0,
+                    kind: HandleKind::Square,
+                });
+            }
+            marks.push(Overlay::Handle { at: world.transform_point2(Vec2::ZERO), kind: HandleKind::Pivot });
+            marks
+        },
     );
+    check("sample_t0_handles_rotated_550x400_1x", image);
 }

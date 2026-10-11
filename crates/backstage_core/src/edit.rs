@@ -130,6 +130,112 @@ pub fn move_nodes(
     batch(commands)
 }
 
+/// Where a node is at a playhead, for transforming it: its evaluated
+/// transform, and its parent's world transform (stage ← parent space).
+struct Placed {
+    transform: crate::geom::Transform,
+    parent: Affine2,
+}
+
+fn placed(project: &Project, comp: CompId, at: &At, node: NodeId) -> Option<Placed> {
+    let composition = project.compositions.get(&comp)?;
+    let scene = evaluate_from(project, &at.state(), comp, at.clock);
+    let state = scene.nodes.get(&node)?;
+    let parent_id = composition.nodes.iter().find(|(_, n)| n.children.contains(&node)).map(|(&id, _)| id);
+    let parent = parent_id.and_then(|p| scene.nodes.get(&p)).map_or(Affine2::IDENTITY, |s| s.world);
+    (parent.matrix2.determinant().abs() > 1e-12)
+        .then_some(Placed { transform: state.props.transform, parent })
+}
+
+/// A node's rotation and skew, without its scale: `local_matrix` is
+/// `T(position) · rotate_skew · S(scale) · T(-pivot)`.
+fn rotate_skew(t: &crate::geom::Transform) -> glam::Mat2 {
+    let bare = crate::geom::Transform { position: Vec2::ZERO, scale: Vec2::ONE, pivot: Vec2::ZERO, ..*t };
+    crate::eval::local_matrix(&bare).matrix2
+}
+
+/// Scales `node` by dragging its box: the point `handle` of its local
+/// (shape) space goes to stage point `pointer` while `anchor` stays where
+/// it is. An axis along which `handle` and `anchor` coincide (an edge
+/// handle) keeps its scale. `uniform` keeps the scale's aspect ratio. Its
+/// position moves to keep the anchor fixed.
+#[allow(clippy::too_many_arguments)]
+pub fn scale_node(
+    project: &Project,
+    comp: CompId,
+    at: &At,
+    node: NodeId,
+    handle: Vec2,
+    anchor: Vec2,
+    pointer: Vec2,
+    uniform: bool,
+) -> Option<Command> {
+    let Placed { transform: t, parent } = placed(project, comp, at, node)?;
+    let m = rotate_skew(&t);
+    if m.determinant().abs() < 1e-12 {
+        return None;
+    }
+    let local = |q: Vec2| t.position + m * (t.scale * (q - t.pivot));
+    let anchor_at = local(anchor);
+    // Where the handle must go, measured from the anchor in the node's
+    // rotated (unscaled) axes.
+    let wanted = m.inverse() * (parent.inverse().transform_point2(pointer) - anchor_at);
+    let span = handle - anchor;
+    let mut scale = t.scale;
+    if uniform {
+        let current = t.scale * span;
+        if current.length_squared() > 1e-12 {
+            scale *= wanted.dot(current) / current.length_squared();
+        }
+    } else {
+        if span.x.abs() > 1e-6 {
+            scale.x = wanted.x / span.x;
+        }
+        if span.y.abs() > 1e-6 {
+            scale.y = wanted.y / span.y;
+        }
+    }
+    // Never quite zero: a node scaled to nothing can't be grabbed again.
+    let at_least = |s: f32| if s.abs() < 1e-3 { 1e-3f32.copysign(s) } else { s };
+    scale = Vec2::new(at_least(scale.x), at_least(scale.y));
+    let position = anchor_at - m * (scale * (anchor - t.pivot));
+    let values = [
+        (Property::X, Value::Number(position.x)),
+        (Property::Y, Value::Number(position.y)),
+        (Property::ScaleX, Value::Number(scale.x)),
+        (Property::ScaleY, Value::Number(scale.y)),
+    ];
+    set_values(project, comp, at, node, &values)
+}
+
+/// Turns `node` about its pivot by the angle the pointer swept from stage
+/// point `from` to `to` around it. `snap` rounds the resulting rotation to
+/// a multiple of that many degrees (Shift: 15).
+pub fn rotate_node(
+    project: &Project,
+    comp: CompId,
+    at: &At,
+    node: NodeId,
+    from: Vec2,
+    to: Vec2,
+    snap: Option<f32>,
+) -> Option<Command> {
+    let Placed { transform: t, parent } = placed(project, comp, at, node)?;
+    let into_parent = parent.inverse();
+    let angle = |p: Vec2| {
+        let d = into_parent.transform_point2(p) - t.position;
+        d.y.atan2(d.x)
+    };
+    let swept = (angle(to) - angle(from)).to_degrees();
+    let mut rotation = t.rotation + swept;
+    if let Some(step) = snap.filter(|s| *s > 0.0) {
+        rotation = (rotation / step).round() * step;
+    }
+    // Keep it in -180..=180 so values stay readable after many turns.
+    rotation = (rotation + 180.0).rem_euclid(360.0) - 180.0;
+    set_values(project, comp, at, node, &[(Property::Rotation, Value::Number(rotation))])
+}
+
 /// One command for several: `None` for none, the command itself for one.
 fn batch(mut commands: Vec<Command>) -> Option<Command> {
     match commands.len() {
@@ -264,5 +370,113 @@ mod tests {
         // The root and a child: only the root moves (the child goes along).
         let command = move_nodes(&project, STAGE, &at(0), &[GROUND, STAGE_ROOT], delta).unwrap();
         assert!(matches!(command, Command::SetRest { node: STAGE_ROOT, .. }), "{command:?}");
+    }
+
+    /// The stage point a node's local point `q` is drawn at.
+    fn drawn_at(project: &Project, node: NodeId, q: Vec2) -> Vec2 {
+        evaluate_from(project, &at(0).state(), STAGE, Time::ZERO).nodes[&node].world.transform_point2(q)
+    }
+
+    // The ground is a 550 × 60 rect at (0, 340) in its own space.
+    const TOP_LEFT: Vec2 = Vec2::new(0.0, 340.0);
+    const BOTTOM_RIGHT: Vec2 = Vec2::new(550.0, 400.0);
+
+    #[test]
+    fn scaling_keeps_the_anchor_and_brings_the_handle_to_the_pointer() {
+        for project in
+            [sample::bounce(), with_root(|t| t.rotation = 30.0), with_root(|t| t.scale = Vec2::splat(2.0))]
+        {
+            let anchor = drawn_at(&project, GROUND, TOP_LEFT);
+            let pointer = drawn_at(&project, GROUND, BOTTOM_RIGHT) + Vec2::new(40.0, 25.0);
+            let command =
+                scale_node(&project, STAGE, &at(0), GROUND, BOTTOM_RIGHT, TOP_LEFT, pointer, false).unwrap();
+            let edited = applied(&project, &command);
+            assert!(drawn_at(&edited, GROUND, TOP_LEFT).abs_diff_eq(anchor, 1e-2), "the anchor stays");
+            assert!(drawn_at(&edited, GROUND, BOTTOM_RIGHT).abs_diff_eq(pointer, 1e-2), "the handle follows");
+        }
+    }
+
+    #[test]
+    fn edge_handles_scale_one_axis_and_shift_keeps_the_ratio() {
+        let project = sample::bounce();
+        let scale = |p: &Project| p.compositions[&STAGE].nodes[&GROUND].rest.transform.scale;
+        // The right edge's middle, dragged right and down: only X changes.
+        let (right, left) = (Vec2::new(550.0, 370.0), Vec2::new(0.0, 370.0));
+        let command =
+            scale_node(&project, STAGE, &at(0), GROUND, right, left, Vec2::new(825.0, 500.0), false).unwrap();
+        let s = scale(&applied(&project, &command));
+        assert!((s.x - 1.5).abs() < 1e-4 && s.y == 1.0, "{s}");
+
+        let pointer = Vec2::new(600.0, 500.0);
+        let command =
+            scale_node(&project, STAGE, &at(0), GROUND, BOTTOM_RIGHT, TOP_LEFT, pointer, true).unwrap();
+        let s = scale(&applied(&project, &command));
+        assert!((s.x - s.y).abs() < 1e-5 && s.x > 1.0, "uniform: {s}");
+    }
+
+    #[test]
+    fn scaling_about_the_pivot_keeps_the_position() {
+        // The free ball's pivot is its origin, where its position puts it.
+        let project = sample::bounce();
+        let handle = Vec2::new(30.0, 30.0);
+        let pointer = drawn_at(&project, FREE_BALL, Vec2::new(60.0, 60.0));
+        let command =
+            scale_node(&project, STAGE, &at(0), FREE_BALL, handle, Vec2::ZERO, pointer, false).unwrap();
+        let edited = applied(&project, &command);
+        let t = edited.compositions[&STAGE].nodes[&FREE_BALL].rest.transform;
+        assert_eq!(t.position, project.compositions[&STAGE].nodes[&FREE_BALL].rest.transform.position);
+        assert!(t.scale.abs_diff_eq(Vec2::splat(2.0), 1e-4), "{t:?}");
+    }
+
+    #[test]
+    fn rotating_turns_about_the_pivot_and_snaps() {
+        let project = sample::bounce();
+        let pivot = drawn_at(&project, FREE_BALL, Vec2::ZERO);
+        let rotation = |p: &Project| p.compositions[&STAGE].nodes[&FREE_BALL].rest.transform.rotation;
+        // A quarter turn clockwise (y down): from the right to below.
+        let (right, below) = (pivot + Vec2::new(50.0, 0.0), pivot + Vec2::new(0.0, 50.0));
+        let command = rotate_node(&project, STAGE, &at(0), FREE_BALL, right, below, None).unwrap();
+        let edited = applied(&project, &command);
+        assert!((rotation(&edited) - 90.0).abs() < 1e-3, "{}", rotation(&edited));
+        assert!(drawn_at(&edited, FREE_BALL, Vec2::ZERO).abs_diff_eq(pivot, 1e-3), "the pivot stays");
+
+        // Four quarter turns come back around.
+        let mut turned = project.clone();
+        for _ in 0..4 {
+            let command = rotate_node(&turned, STAGE, &at(0), FREE_BALL, right, below, None).unwrap();
+            turned = applied(&turned, &command);
+        }
+        assert!(rotation(&turned).abs() < 1e-3, "{}", rotation(&turned));
+
+        let a_bit = pivot + Vec2::new(50.0, 10.0); // about 11°
+        let snapped = rotate_node(&project, STAGE, &at(0), FREE_BALL, right, a_bit, Some(15.0)).unwrap();
+        assert_eq!(rotation(&applied(&project, &snapped)), 15.0);
+        let unsnapped = rotate_node(&project, STAGE, &at(0), FREE_BALL, right, a_bit, None).unwrap();
+        assert!((rotation(&applied(&project, &unsnapped)) - 11.31).abs() < 0.01);
+    }
+
+    #[test]
+    fn handles_key_animated_properties_too() {
+        // The synced ball's X is animated: scaling about a corner moves it,
+        // so X gets a key while the scale changes its rest values.
+        let project = sample::bounce();
+        let pointer = drawn_at(&project, SYNCED_BALL, Vec2::splat(60.0));
+        let command = scale_node(
+            &project,
+            STAGE,
+            &at(1),
+            SYNCED_BALL,
+            Vec2::splat(30.0),
+            Vec2::splat(-30.0),
+            pointer,
+            true,
+        )
+        .unwrap();
+        let Command::Batch(parts) = &command else { panic!("{command:?}") };
+        assert!(
+            parts.iter().any(|c| matches!(c, Command::SetKey { property: Property::X, .. })),
+            "{parts:?}"
+        );
+        applied(&project, &command);
     }
 }

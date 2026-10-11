@@ -20,7 +20,7 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 /// Bumped on any incompatible change to the messages below.
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 /// Upper bound on a single control message, to reject garbage early. Big
 /// enough for a project snapshot.
@@ -209,6 +209,27 @@ pub enum ToTools {
         origin: (f32, f32),
         scale: f32,
     },
+    /// The pointer cursor for what's under it on the stage. Sent when it
+    /// changes.
+    Cursor(CursorKind),
+}
+
+/// Pointer cursors the stage asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum CursorKind {
+    #[default]
+    Default,
+    /// Over a node a press would select.
+    Pointer,
+    /// Over a selected node: a press drags it.
+    Move,
+    /// Scale handles, by their direction on screen.
+    ResizeNs,
+    ResizeEw,
+    ResizeNwse,
+    ResizeNesw,
+    /// Just outside a corner: a press rotates.
+    Rotate,
 }
 
 /// How a pick changes the selection. Shared by the stage (its mirror) and
@@ -406,6 +427,17 @@ mod tests {
                 }),
             (-1e6f32..1e6, -1e6f32..1e6, 0.0f32..100.0)
                 .prop_map(|(x, y, scale)| ToTools::Framing { origin: (x, y), scale }),
+            prop_oneof![
+                Just(CursorKind::Default),
+                Just(CursorKind::Pointer),
+                Just(CursorKind::Move),
+                Just(CursorKind::ResizeNs),
+                Just(CursorKind::ResizeEw),
+                Just(CursorKind::ResizeNwse),
+                Just(CursorKind::ResizeNesw),
+                Just(CursorKind::Rotate),
+            ]
+            .prop_map(ToTools::Cursor),
         ]
     }
 
@@ -574,6 +606,9 @@ mod tests {
             ToTools::Picked { comp: ids::STAGE, nodes: vec![], mode: PickMode::Add },
             ToTools::Picked { comp: ids::BALL, nodes: vec![ids::BALL_BODY], mode: PickMode::Toggle },
             ToTools::Framing { origin: (24.0, 31.5), scale: 0.88 },
+            ToTools::Cursor(CursorKind::Default),
+            ToTools::Cursor(CursorKind::ResizeNwse),
+            ToTools::Cursor(CursorKind::Rotate),
         ] {
             out += &format!("{msg:?} => {}\n", hex(&msg));
         }

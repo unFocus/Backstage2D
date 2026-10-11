@@ -63,7 +63,9 @@ The design is recorded in [ADR 0004](adr/0004-commands-and-document-authority.md
   - [x] Hit testing on the real paths (fills, and strokes with a few pixels of slop), click selection (outermost group, Ctrl for the deepest node, Shift toggles, locked nodes let clicks through), hover, and selection boxes. The stage applies a pick at once and reports `Picked` (protocol v7, ADR 0005).
   - [x] Test tooling: `backstage_uidriver` gives the headless UI smoke test real pointer and keyboard input (cage's virtual input) and screenshots. The smoke test clicks on the stage through GTK. The stage reports its `Framing` (protocol v8).
   - [x] Marquee selection: drag on empty stage; it selects what it touches, Shift adds, and hover boxes preview the result. Selection boxes now sit 2 px outside the bounds.
-  - [ ] Transform handles (scale, rotate)
+  - Transform handles (scale, rotate), and real cursors instead of the stage's crosshair (protocol v9):
+    - [x] One node: an oriented box, 8 scale handles (Shift keeps the aspect ratio, Alt scales about the pivot), rotate zones outside the corners (Shift snaps to 15°), and the pivot mark
+    - [ ] Several nodes: a shared box with corner handles (uniform scale, rotate)
   - [ ] Spatial grid snapping
 - [x] Drag gestures become commands. Undo works across them. Dragging selected nodes previews live and commits one command on release. Animated properties get a key at the playhead, and others change their rest value (ADR 0006). The arrow keys nudge the selection the same way (1 px, or 10 with Shift). Escape cancels a drag.
 - [x] Render as soon as input arrives instead of on the fixed tick; idle while paused. Protocol v6 carries pointer presses, releases, and modifiers. The latency probe's median went from 16.6 ms to 0.9 ms (ADR 0002).
@@ -85,6 +87,7 @@ The design is recorded in [ADR 0004](adr/0004-commands-and-document-authority.md
   - Editing a composition in place, with its parent shown around it, and
     returning to where you were when you leave it
   - Library: renaming compositions, opening assets
+  - Stage: drag the pivot, skew handles, a custom rotate cursor
   - Properties: key animated properties at the playhead, as stage drags do
     (`edit::set_values`), instead of editing rest values
   - Restoring a choice of several crashed sessions, not just the newest

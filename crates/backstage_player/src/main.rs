@@ -197,7 +197,6 @@ impl App {
             project: &self.project,
             scene: &scene,
             scale: gpu.window.scale_factor() as f32,
-            pointer: None,
             presentation: Presentation::Player,
             outlines: &[],
             origin_marker: None,

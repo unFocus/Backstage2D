@@ -38,7 +38,8 @@ impl Rect {
         self.min.cmple(other.max).all() && other.min.cmple(self.max).all()
     }
 
-    fn corners(self) -> [Vec2; 4] {
+    /// Clockwise from the top-left (y down).
+    pub fn corners(self) -> [Vec2; 4] {
         [self.min, Vec2::new(self.max.x, self.min.y), self.max, Vec2::new(self.min.x, self.max.y)]
     }
 }
@@ -96,9 +97,16 @@ fn segment_distance(p: Vec2, a: Vec2, b: Vec2) -> f32 {
 /// half the widest stroke, then transformed. `None` for an empty shape or
 /// a bitmap.
 pub fn item_bounds(item: &DrawItem) -> Option<Rect> {
+    item_bounds_in(item, glam::Affine2::IDENTITY)
+}
+
+/// `item`'s bounds in another space: `to` maps stage coordinates there
+/// (say, a node's inverse world transform, for its own box).
+pub fn item_bounds_in(item: &DrawItem, to: glam::Affine2) -> Option<Rect> {
     let DrawContent::Shape(shape) = item.content else { return None };
     let local = shape_bounds(shape)?;
-    Rect::around(local.corners().map(|c| item.transform.transform_point2(c)))
+    let m = to * item.transform;
+    Rect::around(local.corners().map(|c| m.transform_point2(c)))
 }
 
 fn shape_bounds(shape: &Shape) -> Option<Rect> {

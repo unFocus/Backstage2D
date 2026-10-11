@@ -18,7 +18,7 @@ use backstage_core::edit::{self, At};
 use backstage_core::{
     Animation, Command, CompId, EditorPrefs, Entry, NodeId, NodeKind, Time, TimeGrid, Vec2,
 };
-use backstage_protocol::{Modifiers, PointerAt, PointerEvent, ToStage};
+use backstage_protocol::{CursorKind, Modifiers, PointerAt, PointerEvent, ToStage};
 use gtk::{gdk, gio, glib, prelude::*};
 use relm4::actions::{AccelsPlus, RelmAction, RelmActionGroup};
 use relm4::prelude::*;
@@ -33,6 +33,21 @@ use std::time::{Duration, Instant};
 /// missed heartbeat instead).
 fn frame_rate(fps: u32) -> String {
     if fps == 0 { "idle".into() } else { format!("{fps} fps") }
+}
+
+/// The GTK (CSS) cursor name for what the stage asks for. There's no
+/// standard rotate cursor; the crosshair stands in.
+fn cursor_name(cursor: CursorKind) -> &'static str {
+    match cursor {
+        CursorKind::Default => "default",
+        CursorKind::Pointer => "pointer",
+        CursorKind::Move => "move",
+        CursorKind::ResizeNs => "ns-resize",
+        CursorKind::ResizeEw => "ew-resize",
+        CursorKind::ResizeNwse => "nwse-resize",
+        CursorKind::ResizeNesw => "nesw-resize",
+        CursorKind::Rotate => "crosshair",
+    }
 }
 
 /// A pointer event's position and modifiers, for the stage.
@@ -1267,6 +1282,7 @@ impl App {
                 }
             }
             StageEvent::Framing { origin, scale } => self.stage_framing = Some((origin, scale)),
+            StageEvent::Cursor(cursor) => self.stage_view.set_cursor_from_name(Some(cursor_name(cursor))),
             StageEvent::Exited(reason) => {
                 self.stage_ready = false;
                 self.supervisor.reap();
@@ -1411,7 +1427,16 @@ const CSS: &str = "
 
 #[cfg(test)]
 mod tests {
-    use super::frame_rate;
+    use super::{cursor_name, frame_rate};
+    use backstage_protocol::CursorKind;
+
+    #[test]
+    fn every_cursor_has_a_css_name() {
+        assert_eq!(cursor_name(CursorKind::Default), "default");
+        assert_eq!(cursor_name(CursorKind::ResizeNwse), "nwse-resize");
+        assert_eq!(cursor_name(CursorKind::Rotate), "crosshair");
+        assert_eq!(cursor_name(CursorKind::Move), "move");
+    }
 
     #[test]
     fn no_frames_reads_as_idle() {

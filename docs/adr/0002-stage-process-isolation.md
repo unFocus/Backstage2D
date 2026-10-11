@@ -135,7 +135,10 @@ The stage now draws when something changes instead of on a fixed tick:
 
 The probe, now run on a paused stage as the editor starts it: **min 0.9 ms,
 median 0.9 ms, p95 1.0–1.6 ms** on the RX 6800 (lavapipe: median 3.5 ms).
-That's the readback plus the socket round trip. The GTK upload and the
+That's the readback plus the socket round trip. Since M4 step 5 the probe
+watches the ground's hover box appear and disappear (the crosshair is
+gone), so picking is included: median 1.1 ms on the RX 6800, 4.2 ms on
+lavapipe. The GTK upload and the
 compositor are still not included, and they are now most of the delay,
 which makes zero-copy (C) the next improvement.
 

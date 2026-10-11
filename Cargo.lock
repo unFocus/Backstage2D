@@ -186,6 +186,7 @@ dependencies = [
  "backstage_core",
  "backstage_protocol",
  "backstage_render",
+ "glam",
  "pollster",
  "wgpu",
 ]

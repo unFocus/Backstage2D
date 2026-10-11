@@ -10,7 +10,7 @@
 //! - Locked nodes are skipped, so the click reaches what's under them.
 
 use backstage_core::{Composition, DrawItem, NodeFlags, NodeId, Scene, Vec2};
-use backstage_render::pick::{Rect, hit_item, item_bounds};
+use backstage_render::pick::{Rect, hit_item, item_bounds, item_bounds_in};
 use std::collections::BTreeMap;
 
 /// The edited composition's structure, for mapping items to nodes.
@@ -88,6 +88,22 @@ impl<'c> Picker<'c> {
             .iter()
             .filter(|item| self.is_within(Self::owner(item), node))
             .filter_map(item_bounds)
+            .reduce(Rect::union)
+    }
+
+    /// The box around everything `node` draws, in the node's own space
+    /// (so it turns and skews with the node), or `None` if it draws nothing.
+    pub fn local_bounds(&self, scene: &Scene, node: NodeId) -> Option<Rect> {
+        let world = scene.nodes.get(&node)?.world;
+        if world.matrix2.determinant().abs() < 1e-12 {
+            return None;
+        }
+        let into_node = world.inverse();
+        scene
+            .items
+            .iter()
+            .filter(|item| self.is_within(Self::owner(item), node))
+            .filter_map(|item| item_bounds_in(item, into_node))
             .reduce(Rect::union)
     }
 
@@ -229,6 +245,19 @@ mod tests {
         Command::SetNodeFlags { comp: STAGE, node: GROUP, flags: lock }.apply(&mut project).unwrap();
         let unlocked = marquee(&project, everything.0, everything.1, false);
         assert!(!unlocked.contains(&GROUP) && !unlocked.is_empty(), "locked: left out, {unlocked:?}");
+    }
+
+    #[test]
+    fn local_bounds_are_in_the_nodes_own_space() {
+        let mut project = sample::bounce();
+        let ground = project.compositions.get_mut(&STAGE).unwrap().nodes.get_mut(&GROUND).unwrap();
+        ground.rest.transform.rotation = 30.0;
+        ground.rest.transform.position = Vec2::new(5.0, 7.0);
+        let scene = scene(&project);
+        let local = Picker::new(&project.compositions[&STAGE]).local_bounds(&scene, GROUND).unwrap();
+        // The rect as drawn in its shape, whatever the node's transform.
+        assert!(local.min.abs_diff_eq(Vec2::new(0.0, 340.0), 1e-3), "{local:?}");
+        assert!(local.max.abs_diff_eq(Vec2::new(550.0, 400.0), 1e-3), "{local:?}");
     }
 
     #[test]

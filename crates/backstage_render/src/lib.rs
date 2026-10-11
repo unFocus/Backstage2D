@@ -22,8 +22,6 @@ use wgpu::util::DeviceExt;
 pub const PASTEBOARD: wgpu::Color = wgpu::Color { r: 0.23, g: 0.23, b: 0.25, a: 1.0 };
 /// Bars around the stage in the player.
 pub const LETTERBOX: wgpu::Color = wgpu::Color::BLACK;
-/// Color of the pointer crosshair.
-pub const CROSSHAIR: [f32; 4] = [0.95, 0.15, 0.45, 1.0];
 /// The edited composition's origin (registration point) mark.
 pub const ORIGIN_MARKER: [f32; 4] = [0.15, 0.15, 0.18, 0.9];
 /// Selection boxes on the editor's stage.
@@ -43,8 +41,6 @@ pub struct Frame<'a> {
     pub scene: &'a Scene<'a>,
     /// Physical pixels per logical pixel.
     pub scale: f32,
-    /// Pointer position in logical pixels, if over the stage section.
-    pub pointer: Option<(f32, f32)>,
     pub presentation: Presentation,
     /// The editor's outline view: for each scene item (by index), draw it
     /// as thin outlines in this colour instead. Empty for the player.
@@ -66,13 +62,30 @@ pub enum Overlay {
     Box { rect: pick::Rect, color: [f32; 4], outset: f32 },
     /// `rect` filled.
     Fill { rect: pick::Rect, color: [f32; 4] },
+    /// A 1 px outline through four stage points, in order: a box that
+    /// turns and skews with what it surrounds.
+    Outline { corners: [Vec2; 4], color: [f32; 4] },
+    /// A transform handle at a stage point, the same size on screen at any
+    /// zoom.
+    Handle { at: Vec2, kind: HandleKind },
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandleKind {
+    /// A scale handle: a small white square with a blue edge.
+    Square,
+    /// The pivot (registration point): a small diamond with a dot.
+    Pivot,
+}
+
+/// Half a scale handle's side, in logical pixels.
+pub const HANDLE_HALF: f32 = 3.5;
 
 /// How the stage is framed in the viewport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Presentation {
     /// The editor's stage section: pasteboard, margin, shadow, and the
-    /// pointer crosshair; never enlarged past 1 stage unit per logical pixel.
+    /// never enlarged past 1 stage unit per logical pixel.
     Editor,
     /// The player: the stage fills the window (keeping its aspect ratio)
     /// between black bars, with no shadow or crosshair.
@@ -137,7 +150,7 @@ struct Globals {
 }
 
 /// A rotated solid rectangle in physical pixels (`quads.wgsl`), used for
-/// the stage background, its shadow, and the pointer crosshair.
+/// the stage background, its shadow, and the editor's marks.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Quad {
@@ -502,7 +515,7 @@ impl Renderer {
 }
 
 /// The stage's background (and, in the editor, its shadow), drawn under the
-/// items, followed by the editor's pointer crosshair, drawn over them.
+/// items, followed by the editor's marks, drawn over them.
 /// Returns the quads and how many go under.
 fn overlay_quads(framing: &Framing, frame: &Frame, background: backstage_core::Color) -> (Vec<Quad>, u32) {
     let scale = frame.scale;
@@ -538,6 +551,38 @@ fn overlay_quads(framing: &Framing, frame: &Frame, background: backstage_core::C
             Overlay::Box { rect, color, outset } => {
                 box_quads(&mut quads, framing, rect, scale, outset * scale, color)
             }
+            Overlay::Outline { corners, color } => {
+                let t = scale.max(1.0) / 2.0;
+                // Corners on pixel centres: crisp when the box is square on.
+                let snap = |p: Vec2| p.floor() + 0.5;
+                for i in 0..4 {
+                    let a = snap(framing.view.transform_point2(corners[i]));
+                    let b = snap(framing.view.transform_point2(corners[(i + 1) % 4]));
+                    let d = b - a;
+                    quads.push(Quad {
+                        center: ((a + b) / 2.0).to_array(),
+                        half_size: [d.length() / 2.0 + t, t],
+                        angle: d.y.atan2(d.x),
+                        color,
+                    });
+                }
+            }
+            Overlay::Handle { at, kind } => {
+                let c = framing.view.transform_point2(at);
+                let c = [c.x.floor() + 0.5, c.y.floor() + 0.5];
+                let half = HANDLE_HALF * scale;
+                let ring = scale.max(1.0);
+                let (angle, dot) = match kind {
+                    HandleKind::Square => (0.0, false),
+                    HandleKind::Pivot => (std::f32::consts::FRAC_PI_4, true),
+                };
+                for (h, color) in [(half + ring, SELECTION), (half, [1.0; 4])] {
+                    quads.push(Quad { center: c, half_size: [h, h], angle, color });
+                }
+                if dot {
+                    quads.push(Quad { center: c, half_size: [ring, ring], angle: 0.0, color: SELECTION });
+                }
+            }
             Overlay::Fill { rect, color } => {
                 let a = framing.view.transform_point2(rect.min);
                 let b = framing.view.transform_point2(rect.max);
@@ -549,14 +594,6 @@ fn overlay_quads(framing: &Framing, frame: &Frame, background: backstage_core::C
                 });
             }
         }
-    }
-    if let Some((px, py)) = frame.pointer.filter(|_| editor) {
-        // Snap to pixel centers so 1px lines cover whole pixels (crisp).
-        let (px, py) = ((px * scale).floor() + 0.5, (py * scale).floor() + 0.5);
-        let arm = 14.0 * scale;
-        let thick = scale.max(1.0);
-        quads.push(Quad { center: [px, py], half_size: [arm, thick / 2.0], angle: 0.0, color: CROSSHAIR });
-        quads.push(Quad { center: [px, py], half_size: [thick / 2.0, arm], angle: 0.0, color: CROSSHAIR });
     }
     (quads, under)
 }
