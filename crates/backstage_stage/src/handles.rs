@@ -4,7 +4,9 @@
 //!
 //! One selected node gets a box in its own space, so it turns and skews
 //! with the node: 8 scale handles (corners and edge middles), rotate zones
-//! just outside the corners, and its pivot.
+//! just outside the corners, and its pivot. Several selected nodes share
+//! one stage-aligned box with corner handles only (they scale evenly) and
+//! its centre as the pivot.
 
 use backstage_core::Vec2;
 use backstage_protocol::CursorKind;
@@ -26,6 +28,8 @@ pub struct Handles {
     pub world: Affine2,
     /// The node's pivot (registration point), in its own space.
     pub pivot: Vec2,
+    /// Several nodes' shared box: corner handles only.
+    pub corners_only: bool,
 }
 
 /// What a press on the handles grabs.
@@ -56,6 +60,9 @@ impl Handles {
         let points = self.points();
         let reach = (HANDLE_HALF + GRAB_SLOP) * px;
         for (index, &handle) in points.iter().enumerate() {
+            if self.corners_only && !index.is_multiple_of(2) {
+                continue;
+            }
             let d = (to_screen.transform_point2(handle) - p).abs();
             if d.x <= reach && d.y <= reach {
                 let anchor = points[(index + 4) % 8];
@@ -94,9 +101,12 @@ impl Handles {
     pub fn overlay(&self) -> Vec<Overlay> {
         let corners = self.local.corners().map(|c| self.world.transform_point2(c));
         let mut marks = vec![Overlay::Outline { corners, color: SELECTION }];
+        let step = if self.corners_only { 2 } else { 1 };
         marks.extend(
             self.points()
-                .map(|p| Overlay::Handle { at: self.world.transform_point2(p), kind: HandleKind::Square }),
+                .iter()
+                .step_by(step)
+                .map(|&p| Overlay::Handle { at: self.world.transform_point2(p), kind: HandleKind::Square }),
         );
         marks.push(Overlay::Handle { at: self.world.transform_point2(self.pivot), kind: HandleKind::Pivot });
         marks
@@ -113,6 +123,7 @@ mod tests {
             local: Rect { min: Vec2::ZERO, max: Vec2::new(100.0, 50.0) },
             world: Affine2::from_translation(Vec2::new(200.0, 100.0)),
             pivot: Vec2::ZERO,
+            corners_only: false,
         }
     }
 
@@ -167,6 +178,14 @@ mod tests {
         let top = turned.points()[1];
         let grip = Grip::Scale { index: 1, handle: top, anchor: top, corner: false };
         assert_eq!(turned.cursor(grip, Affine2::IDENTITY), CursorKind::ResizeEw);
+    }
+
+    #[test]
+    fn a_shared_box_has_corner_handles_only() {
+        let shared = Handles { corners_only: true, ..plain() };
+        assert_eq!(grip(&shared, 250.0, 100.0), None, "no edge handles");
+        assert!(matches!(grip(&shared, 300.0, 150.0), Some(Grip::Scale { index: 4, corner: true, .. })));
+        assert_eq!(shared.overlay().len(), 6, "the box, 4 corners, and the pivot");
     }
 
     #[test]

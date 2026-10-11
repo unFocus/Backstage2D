@@ -38,6 +38,9 @@ const PICK_SLOP: f32 = 3.0;
 /// How far the pointer moves, in logical pixels, before a press on empty
 /// space becomes a marquee rather than a click.
 const DRAG_THRESHOLD: f32 = 3.0;
+/// Several nodes' shared box sits this far outside them, in logical
+/// pixels: clear of their own boxes.
+const SHARED_OUTSET: f32 = 6.0;
 /// Shift rotates in steps of this many degrees.
 const ROTATE_SNAP: f32 = 15.0;
 /// Selection and hover boxes sit this far outside the bounds, in logical
@@ -273,21 +276,26 @@ impl Stage {
                 self.hover = None;
                 let Some(hit) = self.hit(at) else { return Ok(()) };
                 // The handles come before what's under them.
-                if let Some((handles, node)) = self.single_handles()
+                if let Some((handles, nodes)) = self.selection_handles()
                     && let Some(grip) = handles.grip_at(self.screen(at), hit.view, self.scale as f32)
                 {
-                    let kind = match grip {
-                        Grip::Scale { handle, anchor, corner, .. } => {
-                            DragKind::Scale { node, handle, anchor, pivot: handles.pivot, corner }
+                    let centre = handles.pivot;
+                    let kind = match (grip, &nodes[..]) {
+                        (Grip::Scale { handle, anchor, corner, .. }, [node]) if !handles.corners_only => {
+                            DragKind::Scale { node: *node, handle, anchor, pivot: handles.pivot, corner }
                         }
-                        Grip::Rotate => DragKind::Rotate { node },
+                        (Grip::Rotate, [node]) if !handles.corners_only => DragKind::Rotate { node: *node },
+                        (Grip::Scale { handle, anchor, .. }, _) => {
+                            DragKind::SharedScale { handle, anchor, centre }
+                        }
+                        (Grip::Rotate, _) => DragKind::SharedRotate { centre },
                     };
                     self.gesture = Some(Gesture::Edit(Box::new(EditDrag {
                         comp: hit.comp,
                         kind,
                         from: hit.point,
                         origin: hit.origin,
-                        nodes: vec![node],
+                        nodes,
                         at: None,
                         command: None,
                         preview: None,
@@ -386,22 +394,27 @@ impl Stage {
         Vec2::new(at.x, at.y) * self.scale as f32
     }
 
-    /// The handles of the selection, when exactly one node is selected and
-    /// it draws something: they're measured in its own space.
-    fn single_handles(&self) -> Option<(Handles, NodeId)> {
+    /// The selection's handles, and the nodes they act on: one node's own,
+    /// or several nodes' shared box.
+    fn selection_handles(&self) -> Option<(Handles, Vec<NodeId>)> {
         let project = shown_project(&self.gesture, &self.host)?;
         let shown = Shown::now(project, &self.transport);
-        let [node] = self.selection.shown(project, shown.comp)[..] else { return None };
+        let nodes = self.selection.shown(project, shown.comp);
         let picker = pick::Picker::new(&project.compositions[&shown.comp]);
         let view = self.framing(project)?.view;
-        Some((handles_for(&picker, &shown.scene, node, view, self.scale as f32)?, node))
+        let handles = match nodes[..] {
+            [] => return None,
+            [node] => handles_for(&picker, &shown.scene, node, view, self.scale as f32)?,
+            _ => shared_handles_for(&picker, &shown.scene, &nodes, view, self.scale as f32)?,
+        };
+        Some((handles, nodes))
     }
 
     /// Tells the editor which cursor to show for what's under the pointer,
     /// if that changed: a handle's, or whether a press would move or pick.
     fn update_cursor(&mut self, at: PointerAt) -> Result<()> {
         let Some(hit) = self.hit(at) else { return Ok(()) };
-        let grip = self.single_handles().and_then(|(handles, _)| {
+        let grip = self.selection_handles().and_then(|(handles, _)| {
             let grip = handles.grip_at(self.screen(at), hit.view, self.scale as f32)?;
             Some(handles.cursor(grip, hit.view))
         });
@@ -531,17 +544,19 @@ impl Stage {
             project.settings.pixel_art,
         )
         .view;
-        let single = match selected[..] {
+        let handles = match selected[..] {
+            [] => None,
             [node] => handles_for(&picker, &shown.scene, node, view, self.scale as f32),
-            _ => None,
+            _ => shared_handles_for(&picker, &shown.scene, &selected, view, self.scale as f32),
         };
+        let single = handles.as_ref().filter(|h| !h.corners_only);
         let boxed = marks.filter(|(n, color)| !(single.is_some() && *color == SELECTION && selected == [*n]));
         let mut overlay: Vec<Overlay> = boxed
             .filter_map(|(n, color)| {
                 Some(Overlay::Box { rect: picker.bounds(&shown.scene, n)?, color, outset: BOX_OUTSET })
             })
             .collect();
-        if let Some(handles) = &single {
+        if let Some(handles) = &handles {
             overlay.extend(handles.overlay());
         }
         if let Some((rect, _)) = marquee {
@@ -631,6 +646,12 @@ enum DragKind {
     Scale { node: NodeId, handle: Vec2, anchor: Vec2, pivot: Vec2, corner: bool },
     /// A rotate zone: turns about the pivot (Shift: in 15° steps).
     Rotate { node: NodeId },
+    /// A corner of several nodes' shared box: they all scale evenly about
+    /// the opposite corner (Alt: the centre). Stage coordinates.
+    SharedScale { handle: Vec2, anchor: Vec2, centre: Vec2 },
+    /// Past a corner of the shared box: they all turn about its centre
+    /// (Shift: in 15° steps).
+    SharedRotate { centre: Vec2 },
 }
 
 impl EditDrag {
@@ -649,6 +670,23 @@ impl EditDrag {
             DragKind::Rotate { node } => {
                 let snap = modifiers.shift.then_some(ROTATE_SNAP);
                 edit::rotate_node(document, self.comp, &at, node, from, to_local, snap)
+            }
+            DragKind::SharedScale { handle, anchor, centre } => {
+                let anchor = if modifiers.alt { centre } else { anchor };
+                let (span, reach) = (handle - anchor, to - anchor);
+                let factor =
+                    if span.length_squared() > 1e-9 { reach.dot(span) / span.length_squared() } else { 1.0 };
+                let factor = if factor.abs() < 1e-3 { 1e-3f32.copysign(factor) } else { factor };
+                let about = anchor - self.origin;
+                edit::transform_nodes(document, self.comp, &at, &self.nodes, about, 0.0, factor)
+            }
+            DragKind::SharedRotate { centre } => {
+                let angle = |p: Vec2| (p - centre).to_angle();
+                let mut swept = (angle(to) - angle(self.from)).to_degrees();
+                if modifiers.shift {
+                    swept = (swept / ROTATE_SNAP).round() * ROTATE_SNAP;
+                }
+                edit::transform_nodes(document, self.comp, &at, &self.nodes, centre - self.origin, swept, 1.0)
             }
         };
         let preview = self.preview.get_or_insert_with(|| Preview { project: document.clone(), undo: None });
@@ -679,7 +717,23 @@ fn handles_for(
     let per_unit = Vec2::new(m.x_axis.length(), m.y_axis.length()).max(Vec2::splat(1e-6));
     let pad = Vec2::splat(BOX_OUTSET * scale) / per_unit;
     let local = Rect { min: local.min - pad, max: local.max + pad };
-    Some(Handles { local, world: state.world, pivot: state.props.transform.pivot })
+    Some(Handles { local, world: state.world, pivot: state.props.transform.pivot, corners_only: false })
+}
+
+/// Several nodes' shared handles: a stage-aligned box around them all,
+/// padded clear of their own boxes, with its centre as the pivot.
+fn shared_handles_for(
+    picker: &pick::Picker,
+    scene: &Scene,
+    nodes: &[NodeId],
+    view: glam::Affine2,
+    scale: f32,
+) -> Option<Handles> {
+    let rect = nodes.iter().filter_map(|&n| picker.bounds(scene, n)).reduce(Rect::union)?;
+    let pad = Vec2::splat(SHARED_OUTSET * scale / view.matrix2.x_axis.x);
+    let local = Rect { min: rect.min - pad, max: rect.max + pad };
+    let centre = (local.min + local.max) / 2.0;
+    Some(Handles { local, world: glam::Affine2::IDENTITY, pivot: centre, corners_only: true })
 }
 
 /// What the stage shows: the drag's preview while a move is live, or the

@@ -64,8 +64,9 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
   - Locked nodes can't be picked.
   - One selected node gets handles: scale (Shift keeps the ratio, Alt
     scales about the pivot) and rotate just outside the corners (Shift
-    snaps to 15°). The stage sends `ToTools::Cursor`, and the editor sets
-    it (protocol v9).
+    snaps to 15°). Several share one box with corner handles: they scale
+    evenly and turn together (`edit::transform_nodes`). The stage sends
+    `ToTools::Cursor`, and the editor sets it (protocol v9).
   - Dragging a selected node moves the whole selection. `edit::move_nodes`
     keys animated properties at the playhead and sets rest values for the
     rest. The stage commits the drag itself (`Committed { request: None }`).

@@ -236,6 +236,69 @@ pub fn rotate_node(
     set_values(project, comp, at, node, &[(Property::Rotation, Value::Number(rotation))])
 }
 
+/// Turns and scales several nodes together, as one: each node's pivot
+/// point turns by `angle` degrees and scales by `scale` about stage point
+/// `about`, and the node's own rotation and scale follow. A node whose
+/// ancestor is also transformed is left to follow it. Exact when the
+/// nodes' parents neither skew nor scale unevenly. `None` if nothing would
+/// change.
+pub fn transform_nodes(
+    project: &Project,
+    comp: CompId,
+    at: &At,
+    nodes: &[NodeId],
+    about: Vec2,
+    angle: f32,
+    scale: f32,
+) -> Option<Command> {
+    let composition = project.compositions.get(&comp)?;
+    let scene = evaluate_from(project, &at.state(), comp, at.clock);
+    let parents: BTreeMap<NodeId, NodeId> =
+        composition.nodes.iter().flat_map(|(&id, n)| n.children.iter().map(move |&c| (c, id))).collect();
+    let moved_with_ancestor = |mut node: NodeId| {
+        while let Some(&parent) = parents.get(&node) {
+            if nodes.contains(&parent) {
+                return true;
+            }
+            node = parent;
+        }
+        false
+    };
+    let turn = Affine2::from_translation(about)
+        * Affine2::from_scale_angle_translation(Vec2::splat(scale), angle.to_radians(), Vec2::ZERO)
+        * Affine2::from_translation(-about);
+    let mut commands = Vec::new();
+    for &node in nodes {
+        if moved_with_ancestor(node) {
+            continue;
+        }
+        let Some(state) = scene.nodes.get(&node) else { continue };
+        let parent =
+            parents.get(&node).and_then(|p| scene.nodes.get(p)).map_or(Affine2::IDENTITY, |s| s.world);
+        if parent.matrix2.determinant().abs() < 1e-12 {
+            continue;
+        }
+        let t = state.props.transform;
+        // The pivot is where the position puts it in the parent's space.
+        let pivot = parent.transform_point2(t.position);
+        let position = parent.inverse().transform_point2(turn.transform_point2(pivot));
+        let values = [
+            (Property::X, Value::Number(position.x)),
+            (Property::Y, Value::Number(position.y)),
+            (Property::Rotation, Value::Number(t.rotation + angle)),
+            (Property::ScaleX, Value::Number(t.scale.x * scale)),
+            (Property::ScaleY, Value::Number(t.scale.y * scale)),
+        ];
+        if let Some(command) = set_values(project, comp, at, node, &values) {
+            match command {
+                Command::Batch(inner) => commands.extend(inner),
+                single => commands.push(single),
+            }
+        }
+    }
+    batch(commands)
+}
+
 /// One command for several: `None` for none, the command itself for one.
 fn batch(mut commands: Vec<Command>) -> Option<Command> {
     match commands.len() {
@@ -478,5 +541,27 @@ mod tests {
             "{parts:?}"
         );
         applied(&project, &command);
+    }
+
+    #[test]
+    fn several_nodes_turn_and_scale_together_as_one() {
+        let project = sample::bounce();
+        let nodes = [FREE_BALL, GROUND];
+        let about = Vec2::new(300.0, 200.0);
+        let command = transform_nodes(&project, STAGE, &at(0), &nodes, about, 90.0, 2.0).unwrap();
+        let edited = applied(&project, &command);
+        // Every point of every node lands where the same turn and scale
+        // about `about` takes it: the pivot, and a point well away from it.
+        let turn = Affine2::from_translation(about)
+            * Affine2::from_scale_angle_translation(Vec2::splat(2.0), 90f32.to_radians(), Vec2::ZERO)
+            * Affine2::from_translation(-about);
+        for node in nodes {
+            for q in [Vec2::ZERO, Vec2::new(30.0, -12.0)] {
+                let before = drawn_at(&project, node, q);
+                let after = drawn_at(&edited, node, q);
+                assert!(after.abs_diff_eq(turn.transform_point2(before), 1e-2), "{node:?} {q}: {after}");
+            }
+        }
+        assert_eq!(transform_nodes(&project, STAGE, &at(0), &nodes, about, 0.0, 1.0), None, "no change");
     }
 }

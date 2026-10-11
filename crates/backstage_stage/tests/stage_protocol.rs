@@ -956,3 +956,53 @@ fn the_cursor_shows_what_a_press_would_do() {
     over(&mut stage, Vec2::new(10.0, 10.0));
     assert_eq!(cursor(&mut stage), CursorKind::Default);
 }
+
+/// Selects both balls and returns their shared handle box.
+fn both_balls(stage: &mut StageHarness) -> backstage_render::pick::Rect {
+    use backstage_protocol::Modifiers;
+    click(stage, centre_of(ids::FREE_BALL), Modifiers::default());
+    click(stage, centre_of(ids::SYNCED_BALL), Modifiers { shift: true, ..Default::default() });
+    // Padded 6 logical px, clear of each ball's own box.
+    let fit =
+        stage_to_view(VIEW, backstage_core::Vec2::X).0 - stage_to_view(VIEW, backstage_core::Vec2::ZERO).0;
+    let pad = backstage_core::Vec2::splat(6.0 / fit);
+    let (a, b) = (bounds_of(ids::FREE_BALL), bounds_of(ids::SYNCED_BALL));
+    backstage_render::pick::Rect { min: a.min.min(b.min) - pad, max: a.max.max(b.max) + pad }
+}
+
+#[test]
+fn a_shared_corner_scales_several_nodes_evenly() {
+    use backstage_core::Vec2;
+    use backstage_protocol::Modifiers;
+    let mut stage = ready_to_click();
+    let shared = both_balls(&mut stage);
+    drag(&mut stage, shared.max, shared.max + Vec2::new(60.0, 20.0), Modifiers::default());
+    let command = drag_commit(&edits(&mut stage));
+    let (free, synced) =
+        (transform_after(&command, ids::FREE_BALL), transform_after(&command, ids::SYNCED_BALL));
+    assert!(free.scale.x > 1.0 && free.scale.x == free.scale.y, "{free:?}");
+    assert_eq!(free.scale, synced.scale, "the same factor");
+    let rest = |n| sample::bounce().compositions[&ids::STAGE].nodes[&n].rest.transform.position;
+    assert_ne!(free.position, rest(ids::FREE_BALL), "moved away from the fixed corner");
+}
+
+#[test]
+fn past_a_shared_corner_turns_several_nodes_together() {
+    use backstage_core::Vec2;
+    use backstage_protocol::Modifiers;
+    let shift = Modifiers { shift: true, ..Default::default() };
+    let mut stage = ready_to_click();
+    let shared = both_balls(&mut stage);
+    let outside = shared.max + Vec2::splat(8.0);
+    drag(&mut stage, outside, outside + Vec2::new(-60.0, 60.0), shift);
+    let command = drag_commit(&edits(&mut stage));
+    for node in [ids::FREE_BALL, ids::SYNCED_BALL] {
+        let t = transform_after(&command, node);
+        assert!(t.rotation != 0.0 && (t.rotation / 15.0).fract() == 0.0, "{node:?}: {}", t.rotation);
+    }
+    assert_eq!(
+        transform_after(&command, ids::FREE_BALL).rotation,
+        transform_after(&command, ids::SYNCED_BALL).rotation,
+        "the same turn"
+    );
+}

@@ -110,6 +110,21 @@ empty space (a marquee).
 **Rotating:** `edit::rotate_node` turns about the pivot by the angle the
 pointer sweeps around it, and Shift snaps the result to 15°.
 
+**Several selected nodes:**
+- Each keeps its own box. They share one stage-aligned box, padded 6
+  pixels so it clears theirs, with **corner handles only**, rotate zones
+  past its corners, and its centre as the pivot.
+- **A corner scales them all evenly** about the opposite corner (Alt: the
+  centre).
+- **Past a corner turns them all** about the centre. Shift snaps the turn
+  to 15° steps; the nodes may start at different angles.
+- `edit::transform_nodes` moves each node's pivot point through the same
+  turn and scale, adds the angle to its rotation, and multiplies its scale.
+- **This is exact when the nodes' parents neither skew nor scale
+  unevenly.** Under such a parent, a node's own rotation and scale can't
+  express the shared transform, and it drifts. Non-uniform scale is
+  single-node only for the same reason.
+
 Handle drags write X, Y, ScaleX, ScaleY, and Rotation through `set_values`,
 so they key animated properties like a move, with the same preview,
 commit, and cancellation.

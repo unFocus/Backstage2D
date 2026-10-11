@@ -263,3 +263,30 @@ fn handles_on_a_rotated_node() {
     );
     check("sample_t0_handles_rotated_550x400_1x", image);
 }
+
+#[test]
+fn shared_handles() {
+    use backstage_core::Vec2;
+    use backstage_core::sample::ids;
+    use backstage_render::pick::Rect;
+    use backstage_render::{HandleKind, SELECTION};
+    // Both balls selected: a box each, and one shared box with corner
+    // handles around its centre.
+    let image = render_editor_marks(|scene| {
+        let free = bounds(scene, &|i| i.instance.first() == Some(&ids::FREE_BALL));
+        let synced = bounds(scene, &|i| i.instance.first() == Some(&ids::SYNCED_BALL));
+        let shared = Rect {
+            min: free.min.min(synced.min) - Vec2::splat(6.0),
+            max: free.max.max(synced.max) + Vec2::splat(6.0),
+        };
+        let mut marks = vec![
+            Overlay::Box { rect: free, color: SELECTION, outset: 2.0 },
+            Overlay::Box { rect: synced, color: SELECTION, outset: 2.0 },
+            Overlay::Outline { corners: shared.corners(), color: SELECTION },
+        ];
+        marks.extend(shared.corners().map(|at| Overlay::Handle { at, kind: HandleKind::Square }));
+        marks.push(Overlay::Handle { at: (shared.min + shared.max) / 2.0, kind: HandleKind::Pivot });
+        marks
+    });
+    check("sample_t0_shared_handles_550x400_1x", image);
+}

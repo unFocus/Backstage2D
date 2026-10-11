@@ -65,7 +65,7 @@ The design is recorded in [ADR 0004](adr/0004-commands-and-document-authority.md
   - [x] Marquee selection: drag on empty stage; it selects what it touches, Shift adds, and hover boxes preview the result. Selection boxes now sit 2 px outside the bounds.
   - Transform handles (scale, rotate), and real cursors instead of the stage's crosshair (protocol v9):
     - [x] One node: an oriented box, 8 scale handles (Shift keeps the aspect ratio, Alt scales about the pivot), rotate zones outside the corners (Shift snaps to 15°), and the pivot mark
-    - [ ] Several nodes: a shared box with corner handles (uniform scale, rotate)
+    - [x] Several nodes: a shared box with corner handles (uniform scale about the opposite corner or, with Alt, the centre; rotate about the centre, Shift in 15° steps)
   - [ ] Spatial grid snapping
 - [x] Drag gestures become commands. Undo works across them. Dragging selected nodes previews live and commits one command on release. Animated properties get a key at the playhead, and others change their rest value (ADR 0006). The arrow keys nudge the selection the same way (1 px, or 10 with Shift). Escape cancels a drag.
 - [x] Render as soon as input arrives instead of on the fixed tick; idle while paused. Protocol v6 carries pointer presses, releases, and modifiers. The latency probe's median went from 16.6 ms to 0.9 ms (ADR 0002).
