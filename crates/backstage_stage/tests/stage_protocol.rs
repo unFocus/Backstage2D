@@ -888,11 +888,15 @@ fn an_edge_handle_scales_one_axis_about_the_opposite_edge() {
     drag(&mut stage, right, right + Vec2::new(50.0, 30.0), Modifiers::default());
     let command = drag_commit(&edits(&mut stage));
     let t = transform_after(&command, ids::GROUND);
-    let expected = (b.max.x + 50.0 - b.min.x) / (b.max.x - b.min.x);
+    // Pressed on the drawn handle (padded out), it moves the true edge by
+    // as much as the pointer moved.
+    let true_box = bounds_of(ids::GROUND);
+    let width = true_box.max.x - true_box.min.x;
+    let expected = (width + 50.0) / width;
     assert!((t.scale.x - expected).abs() < 1e-3 && t.scale.y == 1.0, "only X: {t:?}");
     // The left edge stays where it was.
-    let left = t.position.x + t.scale.x * b.min.x;
-    assert!((left - b.min.x).abs() < 1e-2, "left edge at {left}");
+    let left = t.position.x + t.scale.x * true_box.min.x;
+    assert!((left - true_box.min.x).abs() < 1e-2, "left edge at {left}");
 }
 
 #[test]
@@ -1005,4 +1009,71 @@ fn past_a_shared_corner_turns_several_nodes_together() {
         transform_after(&command, ids::SYNCED_BALL).rotation,
         "the same turn"
     );
+}
+
+/// Turns spatial snapping on (or off) with a 10 px grid.
+fn snapping(stage: &mut StageHarness, on: bool) {
+    let prefs = backstage_core::EditorPrefs { spatial_snap: on, spatial_grid: 10.0, ..Default::default() };
+    assert!(matches!(stage.submit(77, Entry::Do(Command::SetEditorPrefs(prefs))), ToTools::Committed { .. }));
+}
+
+#[test]
+fn with_snapping_a_move_puts_the_pivot_on_the_grid() {
+    use backstage_core::Vec2;
+    use backstage_protocol::Modifiers;
+    let ground = centre_of(ids::GROUND);
+    for (on, expected) in [(true, Vec2::new(10.0, 10.0)), (false, Vec2::new(13.0, 7.0))] {
+        let mut stage = ready_to_click();
+        snapping(&mut stage, on);
+        drag(&mut stage, ground, ground + Vec2::new(13.0, 7.0), Modifiers::default());
+        let t = transform_after(&drag_commit(&edits(&mut stage)), ids::GROUND);
+        assert!(t.position.abs_diff_eq(expected, 0.05), "snapping {on}: {}", t.position);
+    }
+}
+
+#[test]
+fn with_snapping_a_handle_puts_the_true_corner_on_the_grid() {
+    use backstage_core::Vec2;
+    use backstage_protocol::Modifiers;
+    let mut stage = ready_to_click();
+    snapping(&mut stage, true);
+    click(&mut stage, centre_of(ids::FREE_BALL), Modifiers::default());
+    let corner = handle_box(ids::FREE_BALL).max;
+    drag(&mut stage, corner, corner + Vec2::new(23.0, 17.0), Modifiers::default());
+    let command = drag_commit(&edits(&mut stage));
+    let mut project = sample::bounce();
+    command.apply(&mut project).unwrap();
+    let scene = backstage_core::evaluate(&project, &backstage_core::RuntimeState::default(), Time::ZERO);
+    let ball = scene
+        .items
+        .iter()
+        .filter(|i| i.instance.first() == Some(&ids::FREE_BALL))
+        .filter_map(backstage_render::pick::item_bounds)
+        .reduce(backstage_render::pick::Rect::union)
+        .unwrap();
+    let on_grid = |v: f32| ((v / 10.0).round() * 10.0 - v).abs() < 0.05;
+    assert!(on_grid(ball.max.x) && on_grid(ball.max.y), "the corner at {}", ball.max);
+}
+
+#[test]
+fn the_grid_shows_while_snapping_is_on() {
+    use backstage_core::Vec2;
+    let mut stage = ready_to_click();
+    // A vertical grid line at stage x 100 (between horizontal ones), and a
+    // spot between lines, both
+    // on white, clear of the sample.
+    let line = stage_to_view(VIEW, Vec2::new(100.0, 45.0));
+    let between = stage_to_view(VIEW, Vec2::new(105.0, 45.0));
+    let at = |frame: &common::Frame, (x, y): (f32, f32)| frame.pixel(x.floor() as u32, y as u32);
+    let white = [1.0; 4];
+    let frame = stage.next_frame();
+    assert!(color_close(at(&frame, line), white), "no grid while snapping is off");
+    snapping(&mut stage, true);
+    let frame = stage.next_frame();
+    assert!(
+        color_close(at(&frame, line), mix(backstage_render::GRID, white)),
+        "a grid line: {:?}",
+        at(&frame, line)
+    );
+    assert!(color_close(at(&frame, between), white), "white between lines");
 }

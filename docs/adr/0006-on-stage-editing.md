@@ -142,6 +142,26 @@ commit, and cancellation.
 - The stage's own pointer crosshair, a debug aid since M0.5, is gone. The
   latency probe now watches the hover box instead.
 
+### Snapping (M4 step 6)
+- **One switch:** `EditorPrefs.spatial_snap` turns snapping on and shows
+  the grid. `spatial_grid` is the spacing. The Properties panel's document
+  view edits both, and Ctrl+' toggles snapping. They're saved with the
+  project, like the time grid.
+- **Where the grid sits:** through the edited composition's origin. That's
+  the stage's corner for the root, and the stage centre for an entered
+  composition.
+- **Moves:** the **primary** node's pivot lands on a grid point
+  (`edit::snapped_move`), and the rest of the selection moves by the same
+  amount.
+- **Scale handles** (one node or a shared box): the point the handle is
+  dragged to snaps, so the shape's true corner lands on the grid.
+  - Handles are measured on the true bounds. The 2 or 6 px padding is only
+    how the box is drawn.
+  - A press keeps its offset from the handle, so nothing jumps when you
+    grab it.
+- **Not snapped:** rotation (Shift has 15° steps), the marquee, and arrow
+  nudges.
+
 ### Arrow keys
 They nudge the selection by 1 stage pixel, or 10 with Shift (Flash's
 convention). The editor does this with the same `edit::move_nodes`,

@@ -26,6 +26,8 @@ pub enum Key {
     Right,
     /// With ctrl: undo, and with shift too, redo.
     Z,
+    /// With ctrl: grid snapping.
+    Apostrophe,
 }
 
 impl Key {
@@ -42,6 +44,7 @@ impl Key {
             "left" => Key::Left,
             "right" => Key::Right,
             "z" => Key::Z,
+            "apostrophe" => Key::Apostrophe,
             _ => bail!("unknown key {name:?}"),
         })
     }
@@ -60,6 +63,7 @@ impl Key {
             Key::Down => 108,
             Key::Delete => 111,
             Key::Z => 44,
+            Key::Apostrophe => 40,
         }
     }
 

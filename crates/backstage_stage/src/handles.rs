@@ -22,8 +22,12 @@ const ROTATE_REACH: f32 = 16.0;
 /// The handles of one selected node.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Handles {
-    /// The node's box in its own (shape) space.
+    /// The node's box in its own (shape) space: its true bounds, which
+    /// handle drags (and snapping) work with.
     pub local: Rect,
+    /// How far out the box is drawn, in the same units, so it clears edges
+    /// it shares with the stage. Presses are measured against the drawn box.
+    pub pad: Vec2,
     /// The node's own space to the stage.
     pub world: Affine2,
     /// The node's pivot (registration point), in its own space.
@@ -47,25 +51,27 @@ impl Handles {
     /// corner: corners at even indices, edge middles at odd ones. Handle
     /// `i`'s opposite is `(i + 4) % 8`.
     pub fn points(&self) -> [Vec2; 8] {
-        let c = self.local.corners();
-        std::array::from_fn(|i| {
-            if i.is_multiple_of(2) { c[i / 2] } else { (c[i / 2] + c[(i / 2 + 1) % 4]) / 2.0 }
-        })
+        points_of(self.local)
+    }
+
+    /// The box as drawn: the bounds grown by the pad.
+    fn drawn(&self) -> Rect {
+        Rect { min: self.local.min - self.pad, max: self.local.max + self.pad }
     }
 
     /// What's under screen point `p`, if anything. `view` maps stage
     /// coordinates to the screen; `px` is screen pixels per logical pixel.
     pub fn grip_at(&self, p: Vec2, view: Affine2, px: f32) -> Option<Grip> {
         let to_screen = view * self.world;
-        let points = self.points();
+        let (points, drawn) = (self.points(), points_of(self.drawn()));
         let reach = (HANDLE_HALF + GRAB_SLOP) * px;
-        for (index, &handle) in points.iter().enumerate() {
+        for (index, &shown) in drawn.iter().enumerate() {
             if self.corners_only && !index.is_multiple_of(2) {
                 continue;
             }
-            let d = (to_screen.transform_point2(handle) - p).abs();
+            let d = (to_screen.transform_point2(shown) - p).abs();
             if d.x <= reach && d.y <= reach {
-                let anchor = points[(index + 4) % 8];
+                let (handle, anchor) = (points[index], points[(index + 4) % 8]);
                 return Some(Grip::Scale { index, handle, anchor, corner: index.is_multiple_of(2) });
             }
         }
@@ -74,9 +80,10 @@ impl Handles {
             return None;
         }
         let local = to_screen.inverse().transform_point2(p);
-        let inside = local.cmpge(self.local.min).all() && local.cmple(self.local.max).all();
+        let shown = self.drawn();
+        let inside = local.cmpge(shown.min).all() && local.cmple(shown.max).all();
         let near_corner =
-            points.iter().step_by(2).any(|&c| to_screen.transform_point2(c).distance(p) <= ROTATE_REACH * px);
+            drawn.iter().step_by(2).any(|&c| to_screen.transform_point2(c).distance(p) <= ROTATE_REACH * px);
         (!inside && near_corner).then_some(Grip::Rotate)
     }
 
@@ -99,11 +106,11 @@ impl Handles {
 
     /// The box, its handles, and the pivot, to draw.
     pub fn overlay(&self) -> Vec<Overlay> {
-        let corners = self.local.corners().map(|c| self.world.transform_point2(c));
+        let corners = self.drawn().corners().map(|c| self.world.transform_point2(c));
         let mut marks = vec![Overlay::Outline { corners, color: SELECTION }];
         let step = if self.corners_only { 2 } else { 1 };
         marks.extend(
-            self.points()
+            points_of(self.drawn())
                 .iter()
                 .step_by(step)
                 .map(|&p| Overlay::Handle { at: self.world.transform_point2(p), kind: HandleKind::Square }),
@@ -111,6 +118,15 @@ impl Handles {
         marks.push(Overlay::Handle { at: self.world.transform_point2(self.pivot), kind: HandleKind::Pivot });
         marks
     }
+}
+
+/// A box's 8 handle points: corners at even indices, edge middles at odd
+/// ones, clockwise from the top-left.
+fn points_of(rect: Rect) -> [Vec2; 8] {
+    let c = rect.corners();
+    std::array::from_fn(
+        |i| if i.is_multiple_of(2) { c[i / 2] } else { (c[i / 2] + c[(i / 2 + 1) % 4]) / 2.0 },
+    )
 }
 
 #[cfg(test)]
@@ -121,6 +137,7 @@ mod tests {
     fn plain() -> Handles {
         Handles {
             local: Rect { min: Vec2::ZERO, max: Vec2::new(100.0, 50.0) },
+            pad: Vec2::ZERO,
             world: Affine2::from_translation(Vec2::new(200.0, 100.0)),
             pivot: Vec2::ZERO,
             corners_only: false,
@@ -178,6 +195,17 @@ mod tests {
         let top = turned.points()[1];
         let grip = Grip::Scale { index: 1, handle: top, anchor: top, corner: false };
         assert_eq!(turned.cursor(grip, Affine2::IDENTITY), CursorKind::ResizeEw);
+    }
+
+    #[test]
+    fn presses_go_by_the_drawn_box_but_grips_carry_the_true_points() {
+        let padded = Handles { pad: Vec2::splat(6.0), ..plain() };
+        // The drawn bottom-right corner is 6 out from the true one.
+        let Some(Grip::Scale { index: 4, handle, .. }) = grip(&padded, 306.0, 156.0) else {
+            panic!("missed")
+        };
+        assert_eq!(handle, Vec2::new(100.0, 50.0), "the true corner");
+        assert_eq!(grip(&padded, 230.0, 130.0), None, "inside the drawn box: the node's own");
     }
 
     #[test]

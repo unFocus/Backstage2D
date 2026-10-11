@@ -28,6 +28,10 @@ pub const ORIGIN_MARKER: [f32; 4] = [0.15, 0.15, 0.18, 0.9];
 pub const SELECTION: [f32; 4] = [0x2f as f32 / 255.0, 0x7d as f32 / 255.0, 1.0, 1.0];
 /// The box around what a click would pick.
 pub const HOVER: [f32; 4] = [0x2f as f32 / 255.0, 0x7d as f32 / 255.0, 1.0, 0.5];
+/// Grid lines on the editor's stage.
+pub const GRID: [f32; 4] = [0.45, 0.55, 0.7, 0.35];
+/// Grid lines closer than this on screen, in logical pixels, are thinned.
+const GRID_MIN_GAP: f32 = 8.0;
 /// Inside the marquee.
 pub const MARQUEE: [f32; 4] = [0x2f as f32 / 255.0, 0x7d as f32 / 255.0, 1.0, 0.15];
 /// Multisample count for anti-aliasing.
@@ -51,6 +55,17 @@ pub struct Frame<'a> {
     /// The editor's on-stage marks (selection and hover boxes), drawn over
     /// the items. Empty for the player.
     pub overlay: &'a [Overlay],
+    /// The editor's spatial grid, drawn behind the items. `None` for the
+    /// player, or with snapping off.
+    pub grid: Option<Grid>,
+}
+
+/// A grid of `spacing` stage units through stage point `origin` (where the
+/// edited composition's origin is drawn).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Grid {
+    pub spacing: f32,
+    pub origin: Vec2,
 }
 
 /// An editor mark drawn over the stage, in screen pixels whatever the zoom.
@@ -537,6 +552,9 @@ fn overlay_quads(framing: &Framing, frame: &Frame, background: backstage_core::C
         angle: 0.0,
         color: [background.r, background.g, background.b, background.a],
     });
+    if let Some(grid) = frame.grid.filter(|g| editor && g.spacing > 0.0) {
+        grid_quads(&mut quads, framing, grid, scale);
+    }
     let under = quads.len() as u32;
     if let Some(origin) = frame.origin_marker.filter(|_| editor) {
         let p = framing.view.transform_point2(origin);
@@ -596,6 +614,44 @@ fn overlay_quads(framing: &Framing, frame: &Frame, background: backstage_core::C
         }
     }
     (quads, under)
+}
+
+/// The grid's lines across the stage, 1 px wide, every 2nd, 4th, … one if
+/// they'd be closer than `GRID_MIN_GAP` on screen.
+fn grid_quads(quads: &mut Vec<Quad>, framing: &Framing, grid: Grid, scale: f32) {
+    let fit = framing.view.matrix2.x_axis.x;
+    let mut step = grid.spacing;
+    while step * fit < GRID_MIN_GAP * scale {
+        step *= 2.0;
+    }
+    let size = framing.stage_size / fit; // in stage units
+    let t = scale.max(1.0) / 2.0;
+    let top_left = framing.view.translation;
+    let mid = top_left + framing.stage_size / 2.0;
+    // Lines at origin + i × step inside 0..=size, on each axis.
+    let lines = |origin: f32, extent: f32| {
+        let first = ((0.0 - origin) / step).ceil() as i64;
+        let last = ((extent - origin) / step).floor() as i64;
+        (first..=last).map(move |i| origin + i as f32 * step)
+    };
+    for x in lines(grid.origin.x, size.x) {
+        let sx = (top_left.x + x * fit).floor() + 0.5;
+        quads.push(Quad {
+            center: [sx, mid.y],
+            half_size: [t, framing.stage_size.y / 2.0],
+            angle: 0.0,
+            color: GRID,
+        });
+    }
+    for y in lines(grid.origin.y, size.y) {
+        let sy = (top_left.y + y * fit).floor() + 0.5;
+        quads.push(Quad {
+            center: [mid.x, sy],
+            half_size: [framing.stage_size.x / 2.0, t],
+            angle: 0.0,
+            color: GRID,
+        });
+    }
 }
 
 /// A 1 px (logical) outline around `rect`, `outset` physical pixels

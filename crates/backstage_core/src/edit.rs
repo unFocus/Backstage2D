@@ -299,6 +299,29 @@ pub fn transform_nodes(
     batch(commands)
 }
 
+/// `p` rounded to the nearest point of a grid of `spacing` units from the
+/// origin. A spacing of zero or less snaps nothing.
+pub fn snap(p: Vec2, spacing: f32) -> Vec2 {
+    if spacing > 0.0 { (p / spacing).round() * spacing } else { p }
+}
+
+/// The move closest to `delta` that puts `node`'s pivot (its registration
+/// point, in the composition's space) on the grid. A move drag snaps its
+/// primary node this way and moves the rest of the selection along.
+pub fn snapped_move(
+    project: &Project,
+    comp: CompId,
+    at: &At,
+    node: NodeId,
+    delta: Vec2,
+    spacing: f32,
+) -> Vec2 {
+    let scene = evaluate_from(project, &at.state(), comp, at.clock);
+    let Some(state) = scene.nodes.get(&node) else { return delta };
+    let pivot = state.world.transform_point2(state.props.transform.pivot);
+    snap(pivot + delta, spacing) - pivot
+}
+
 /// One command for several: `None` for none, the command itself for one.
 fn batch(mut commands: Vec<Command>) -> Option<Command> {
     match commands.len() {
@@ -563,5 +586,31 @@ mod tests {
             }
         }
         assert_eq!(transform_nodes(&project, STAGE, &at(0), &nodes, about, 0.0, 1.0), None, "no change");
+    }
+
+    #[test]
+    fn points_snap_to_the_nearest_grid_point() {
+        assert_eq!(snap(Vec2::new(14.0, 16.0), 10.0), Vec2::new(10.0, 20.0));
+        assert_eq!(snap(Vec2::new(-14.0, -16.0), 10.0), Vec2::new(-10.0, -20.0));
+        assert_eq!(snap(Vec2::new(25.0, 0.4), 10.0), Vec2::new(30.0, 0.0), "halves round away from zero");
+        assert_eq!(snap(Vec2::new(3.3, 4.4), 0.0), Vec2::new(3.3, 4.4), "no grid");
+    }
+
+    #[test]
+    fn a_snapped_move_puts_the_pivot_on_the_grid() {
+        let project = sample::bounce();
+        // The free ball's pivot is at (400, 300), on the grid already.
+        let d = snapped_move(&project, STAGE, &at(0), FREE_BALL, Vec2::new(13.0, 7.0), 10.0);
+        assert_eq!(d, Vec2::new(10.0, 10.0));
+        // Off the grid to start with: it lands on it.
+        let mut off = project.clone();
+        let ball = off.compositions.get_mut(&STAGE).unwrap().nodes.get_mut(&FREE_BALL).unwrap();
+        ball.rest.transform.position = Vec2::new(403.0, 296.0);
+        let d = snapped_move(&off, STAGE, &at(0), FREE_BALL, Vec2::new(13.0, 7.0), 10.0);
+        assert_eq!(Vec2::new(403.0, 296.0) + d, Vec2::new(420.0, 300.0));
+        assert_eq!(
+            snapped_move(&project, STAGE, &at(0), FREE_BALL, Vec2::new(13.0, 7.0), 0.0),
+            Vec2::new(13.0, 7.0)
+        );
     }
 }

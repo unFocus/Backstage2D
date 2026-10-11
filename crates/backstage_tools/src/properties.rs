@@ -11,8 +11,8 @@
 //! [`Properties`] component shows them and reports changes to the app.
 
 use backstage_core::{
-    AnimId, BlendMode, Color, Command, CompId, Entry, NodeId, NodeKind, Project, ProjectSettings, Property,
-    Props, Value,
+    AnimId, BlendMode, Color, Command, CompId, EditorPrefs, Entry, NodeId, NodeKind, Project,
+    ProjectSettings, Property, Props, Value,
 };
 use gtk::{gdk, prelude::*};
 use relm4::prelude::*;
@@ -67,7 +67,7 @@ pub fn blend_index(mode: BlendMode) -> usize {
 /// What the panel shows.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PropertiesModel {
-    Document { name: String, settings: ProjectSettings },
+    Document { name: String, settings: ProjectSettings, prefs: EditorPrefs },
     Node(NodeView),
 }
 
@@ -102,7 +102,11 @@ impl PropertiesModel {
         selection: Option<NodeId>,
         anim: Option<AnimId>,
     ) -> Self {
-        let document = || PropertiesModel::Document { name: name.to_owned(), settings: project.settings };
+        let document = || PropertiesModel::Document {
+            name: name.to_owned(),
+            settings: project.settings,
+            prefs: project.editor,
+        };
         let Some(comp) = project.compositions.get(&comp) else { return document() };
         let Some((id, node)) = selection.and_then(|id| Some((id, comp.nodes.get(&id)?))) else {
             return document();
@@ -162,6 +166,11 @@ pub fn rename(project: &Project, comp: CompId, node: NodeId, name: &str) -> Opti
     let name = name.trim();
     (!name.is_empty() && name != current)
         .then(|| Entry::Do(Command::RenameNode { comp, node, name: name.to_owned() }))
+}
+
+/// A `SetEditorPrefs`, or `None` if nothing changed.
+pub fn prefs_edit(project: &Project, prefs: EditorPrefs) -> Option<Entry> {
+    (prefs != project.editor).then_some(Entry::Do(Command::SetEditorPrefs(prefs)))
 }
 
 /// A `SetSettings`, or `None` if nothing changed.
@@ -234,6 +243,7 @@ pub enum PropertiesMsg {
     Edited(Property, Value),
     Renamed(String),
     SettingsEdited(ProjectSettings),
+    PrefsEdited(EditorPrefs),
 }
 
 #[derive(Debug)]
@@ -241,6 +251,7 @@ pub enum PropertiesOutput {
     EditRest { node: NodeId, property: Property, value: Value },
     Rename { node: NodeId, name: String },
     EditSettings(ProjectSettings),
+    EditPrefs(EditorPrefs),
 }
 
 pub struct PropertiesWidgets {
@@ -254,6 +265,8 @@ pub struct PropertiesWidgets {
     height: gtk::SpinButton,
     background: gtk::ColorDialogButton,
     pixel_art: gtk::Switch,
+    grid_spacing: gtk::SpinButton,
+    grid_snap: gtk::Switch,
 }
 
 fn key_label(text: &str) -> gtk::Label {
@@ -307,6 +320,7 @@ impl SimpleComponent for Properties {
             model: Rc::new(RefCell::new(PropertiesModel::Document {
                 name: String::new(),
                 settings: ProjectSettings::default(),
+                prefs: EditorPrefs::default(),
             })),
         };
 
@@ -396,12 +410,18 @@ impl SimpleComponent for Properties {
         background.set_halign(gtk::Align::Start);
         let pixel_art = gtk::Switch::new();
         pixel_art.set_halign(gtk::Align::Start);
+        let grid_spacing = spin(1.0, 200.0, 1.0, 0);
+        let grid_snap = gtk::Switch::new();
+        grid_snap.set_halign(gtk::Align::Start);
+        grid_snap.set_tooltip_text(Some("Snap to grid, and show it (Ctrl+')"));
         for (row, (key, widget)) in [
             ("Document", doc_name.upcast_ref::<gtk::Widget>()),
             ("Stage width", width.upcast_ref()),
             ("Stage height", height.upcast_ref()),
             ("Background", background.upcast_ref()),
             ("Pixel art", pixel_art.upcast_ref()),
+            ("Grid", grid_spacing.upcast_ref()),
+            ("Snap to grid", grid_snap.upcast_ref()),
         ]
         .into_iter()
         .enumerate()
@@ -449,6 +469,28 @@ impl SimpleComponent for Properties {
             }
         });
 
+        // The grid's two fields report the whole editor prefs likewise.
+        let prefs_now = {
+            let model = model.model.clone();
+            move || match &*model.borrow() {
+                PropertiesModel::Document { prefs, .. } => Some(*prefs),
+                PropertiesModel::Node(_) => None,
+            }
+        };
+        let (s, now) = (sender.clone(), prefs_now.clone());
+        grid_spacing.connect_value_changed(move |w| {
+            if let Some(prefs) = now() {
+                let spatial_grid = w.value().round() as f32;
+                s.input(PropertiesMsg::PrefsEdited(EditorPrefs { spatial_grid, ..prefs }));
+            }
+        });
+        let (s, now) = (sender.clone(), prefs_now);
+        grid_snap.connect_active_notify(move |w| {
+            if let Some(prefs) = now() {
+                s.input(PropertiesMsg::PrefsEdited(EditorPrefs { spatial_snap: w.is_active(), ..prefs }));
+            }
+        });
+
         let stack = gtk::Stack::new();
         stack.add_named(&doc_grid, Some("document"));
         stack.add_named(&node_grid, Some("node"));
@@ -469,6 +511,8 @@ impl SimpleComponent for Properties {
             height,
             background,
             pixel_art,
+            grid_spacing,
+            grid_snap,
         };
         ComponentParts { model, widgets }
     }
@@ -507,6 +551,13 @@ impl SimpleComponent for Properties {
                     let _ = sender.output(PropertiesOutput::EditSettings(settings));
                 }
             }
+            PropertiesMsg::PrefsEdited(prefs) => {
+                if let PropertiesModel::Document { prefs: current, .. } = &*model
+                    && prefs != *current
+                {
+                    let _ = sender.output(PropertiesOutput::EditPrefs(prefs));
+                }
+            }
         }
     }
 
@@ -515,7 +566,7 @@ impl SimpleComponent for Properties {
         // `update` sees no change and sends nothing.
         let model = self.model.borrow().clone();
         match &model {
-            PropertiesModel::Document { name, settings } => {
+            PropertiesModel::Document { name, settings, prefs } => {
                 w.stack.set_visible_child_name("document");
                 w.heading.set_label("Properties · Document");
                 w.doc_name.set_label(name);
@@ -526,6 +577,8 @@ impl SimpleComponent for Properties {
                     w.background.set_rgba(&gdk::RGBA::new(c.r, c.g, c.b, c.a));
                 }
                 w.pixel_art.set_active(settings.pixel_art);
+                w.grid_spacing.set_value(prefs.spatial_grid as f64);
+                w.grid_snap.set_active(prefs.spatial_snap);
             }
             PropertiesModel::Node(view) => {
                 w.stack.set_visible_child_name("node");
@@ -595,11 +648,23 @@ mod tests {
     }
 
     #[test]
+    fn grid_edits_skip_unchanged_prefs() {
+        let project = sample::bounce();
+        assert_eq!(prefs_edit(&project, project.editor), None, "unchanged");
+        let on = backstage_core::EditorPrefs { spatial_snap: true, ..project.editor };
+        assert_eq!(prefs_edit(&project, on), Some(Entry::Do(Command::SetEditorPrefs(on))));
+    }
+
+    #[test]
     fn nothing_selected_shows_the_document() {
         let project = sample::bounce();
         assert_eq!(
             PropertiesModel::build(&project, "bounce", STAGE, None, Some(STAGE_MAIN)),
-            PropertiesModel::Document { name: "bounce".into(), settings: project.settings }
+            PropertiesModel::Document {
+                name: "bounce".into(),
+                settings: project.settings,
+                prefs: project.editor
+            }
         );
         let gone = backstage_core::NodeId::from_raw(1);
         assert!(matches!(

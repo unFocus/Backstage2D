@@ -43,7 +43,9 @@ cargo test -p backstage_stage --test stage_protocol -- --ignored --nocapture lat
   Save is Ctrl+S, and Save As is Ctrl+Shift+S. Enter plays or pauses the
   timeline. Escape cancels a drag on the stage, or else clears the
   selection. The arrow keys nudge the selection by 1 px, or 10 with Shift.
-  F2 (or a double-click) renames the selected layer. Window shortcuts step aside
+  Ctrl+' turns grid snapping on or off (and shows the grid; spacing in
+  the Properties panel's document view). F2 (or a double-click) renames
+  the selected layer. Window shortcuts step aside
   for focused text fields, spin buttons, and popovers
   (`keys_belong_to_focus` in `app.rs`).
 - The editor owns the playhead and sends it with `ToStage::Transport`,

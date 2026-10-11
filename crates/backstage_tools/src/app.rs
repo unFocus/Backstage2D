@@ -146,6 +146,8 @@ pub enum AppMsg {
     Tick,
     Undo,
     Redo,
+    /// Ctrl+': snap to the spatial grid (and show it), or stop.
+    ToggleGridSnap,
     /// Arrow keys: move the selection by this many stage pixels.
     Nudge(f32, f32),
     Timeline(TimelineOutput),
@@ -480,6 +482,7 @@ impl SimpleComponent for App {
             AppMsg::Library(out) => self.on_library(out),
             AppMsg::Escape if self.stage_held => self.supervisor.send(&ToStage::CancelGesture),
             AppMsg::Escape => self.select(None),
+            AppMsg::ToggleGridSnap => self.set_prefs(|p| p.spatial_snap = !p.spatial_snap),
             AppMsg::SmokeShot(name, step) => {
                 self.smoke_shot(name);
                 self.run_smoke_step(step, &sender);
@@ -679,6 +682,7 @@ impl App {
             self.properties.emit(PropertiesMsg::SetModel(PropertiesModel::Document {
                 name: String::new(),
                 settings: Default::default(),
+                prefs: Default::default(),
             }));
             return;
         };
@@ -788,6 +792,7 @@ impl App {
             }
             PropertiesOutput::Rename { node, name } => properties::rename(project, comp, node, &name),
             PropertiesOutput::EditSettings(settings) => properties::settings_edit(project, settings),
+            PropertiesOutput::EditPrefs(prefs) => properties::prefs_edit(project, prefs),
         };
         if let Some(entry) = entry {
             self.submit(entry);
@@ -1304,8 +1309,9 @@ impl App {
     }
 }
 
-/// Ctrl+Z / Ctrl+Shift+Z, Enter to play or pause, Escape to deselect, and
-/// the arrow keys for the debug nudge (10 px, or 1 px with Shift). Capture
+/// Ctrl+Z / Ctrl+Shift+Z, Enter to play or pause, Escape to cancel a stage
+/// drag or deselect, Ctrl+' for grid snapping, and the arrow keys to nudge
+/// the selection (1 px, or 10 px with Shift). Capture
 /// phase, so focused buttons don't swallow the arrows; but a text field or
 /// spin button being typed in, or an open popover (a dropdown's list),
 /// keeps its keys.
@@ -1317,6 +1323,7 @@ fn shortcuts(sender: &ComponentSender<App>) -> gtk::ShortcutController {
         Nudge(f32, f32),
         TogglePlay,
         Escape,
+        ToggleGridSnap,
     }
     let mut bindings =
         vec![("<Control>z".to_owned(), Action::Undo), ("<Control><Shift>z".to_owned(), Action::Redo)];
@@ -1324,6 +1331,7 @@ fn shortcuts(sender: &ComponentSender<App>) -> gtk::ShortcutController {
         bindings.push((key.to_owned(), Action::TogglePlay));
     }
     bindings.push(("Escape".to_owned(), Action::Escape));
+    bindings.push(("<Control>apostrophe".to_owned(), Action::ToggleGridSnap));
     for (key, dx, dy) in [("Left", -1.0, 0.0), ("Right", 1.0, 0.0), ("Up", 0.0, -1.0), ("Down", 0.0, 1.0)] {
         bindings.push((key.to_owned(), Action::Nudge(dx, dy)));
         bindings.push((format!("<Shift>{key}"), Action::Nudge(dx * 10.0, dy * 10.0)));
@@ -1343,6 +1351,7 @@ fn shortcuts(sender: &ComponentSender<App>) -> gtk::ShortcutController {
                 Action::Nudge(dx, dy) => AppMsg::Nudge(dx, dy),
                 Action::TogglePlay => AppMsg::TogglePlay,
                 Action::Escape => AppMsg::Escape,
+                Action::ToggleGridSnap => AppMsg::ToggleGridSnap,
             });
             glib::Propagation::Stop
         });

@@ -68,6 +68,7 @@ fn render_project(
         outlines: &outlines,
         origin_marker: None,
         overlay: &overlay,
+        grid: grid_for(project),
     };
     let stride = target.stride() as usize;
     let mut image = RgbaImage::new(size.0, size.1);
@@ -193,6 +194,24 @@ fn marquee() {
         vec![Overlay::Fill { rect, color: MARQUEE }, Overlay::Box { rect, color: SELECTION, outset: 0.0 }]
     });
     check("sample_t0_marquee_550x400_1x", image);
+}
+
+/// The grid the editor shows for `project`, if snapping is on.
+fn grid_for(project: &backstage_core::Project) -> Option<backstage_render::Grid> {
+    let prefs = project.editor;
+    prefs
+        .spatial_snap
+        .then_some(backstage_render::Grid { spacing: prefs.spatial_grid, origin: backstage_core::Vec2::ZERO })
+}
+
+#[test]
+fn grid() {
+    let mut project = sample::bounce();
+    project.editor.spatial_snap = true;
+    project.editor.spatial_grid = 25.0;
+    let image =
+        render_project(&project, Presentation::Editor, (550, 400), Time::ZERO, 1.0, |_| None, |_| Vec::new());
+    check("sample_t0_grid_550x400_1x", image);
 }
 
 /// Bounds of the items `owned` picks.

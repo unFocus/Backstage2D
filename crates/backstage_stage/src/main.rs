@@ -280,13 +280,24 @@ impl Stage {
                     && let Some(grip) = handles.grip_at(self.screen(at), hit.view, self.scale as f32)
                 {
                     let centre = handles.pivot;
+                    // How far the press is from the handle's true point (the
+                    // box is drawn padded): the handle keeps that offset.
+                    let grab = |handle: Vec2| hit.point - handles.world.transform_point2(handle);
                     let kind = match (grip, &nodes[..]) {
                         (Grip::Scale { handle, anchor, corner, .. }, [node]) if !handles.corners_only => {
-                            DragKind::Scale { node: *node, handle, anchor, pivot: handles.pivot, corner }
+                            let grab = grab(handle);
+                            DragKind::Scale {
+                                node: *node,
+                                handle,
+                                anchor,
+                                pivot: handles.pivot,
+                                corner,
+                                grab,
+                            }
                         }
                         (Grip::Rotate, [node]) if !handles.corners_only => DragKind::Rotate { node: *node },
                         (Grip::Scale { handle, anchor, .. }, _) => {
-                            DragKind::SharedScale { handle, anchor, centre }
+                            DragKind::SharedScale { handle, anchor, centre, grab: grab(handle) }
                         }
                         (Grip::Rotate, _) => DragKind::SharedRotate { centre },
                     };
@@ -571,6 +582,10 @@ impl Stage {
             outlines: &shown.outlines,
             origin_marker: shown.origin,
             overlay: &overlay,
+            grid: project.editor.spatial_snap.then_some(backstage_render::Grid {
+                spacing: project.editor.spatial_grid,
+                origin: shown.origin.unwrap_or(Vec2::ZERO),
+            }),
         };
         self.seq += 1;
         let slot = (self.seq % FRAME_SLOTS as u64) as u32;
@@ -642,13 +657,14 @@ enum DragKind {
     Move,
     /// A scale handle: `handle` follows the pointer while `anchor` (the
     /// opposite handle; Alt: the pivot) stays. Shift keeps a corner's aspect.
-    /// All in the node's own space.
-    Scale { node: NodeId, handle: Vec2, anchor: Vec2, pivot: Vec2, corner: bool },
+    /// All in the node's own space; `grab` is where the press was from the
+    /// handle, on the stage.
+    Scale { node: NodeId, handle: Vec2, anchor: Vec2, pivot: Vec2, corner: bool, grab: Vec2 },
     /// A rotate zone: turns about the pivot (Shift: in 15° steps).
     Rotate { node: NodeId },
     /// A corner of several nodes' shared box: they all scale evenly about
     /// the opposite corner (Alt: the centre). Stage coordinates.
-    SharedScale { handle: Vec2, anchor: Vec2, centre: Vec2 },
+    SharedScale { handle: Vec2, anchor: Vec2, centre: Vec2, grab: Vec2 },
     /// Past a corner of the shared box: they all turn about its centre
     /// (Shift: in 15° steps).
     SharedRotate { centre: Vec2 },
@@ -660,20 +676,31 @@ impl EditDrag {
     fn update(&mut self, document: &Project, to: Vec2, modifiers: Modifiers) {
         let Some(at) = self.at else { return };
         let (from, to_local) = (self.from - self.origin, to - self.origin);
+        // The grid, in the composition's own space, when snapping is on.
+        let prefs = document.editor;
+        let spacing = if prefs.spatial_snap { prefs.spatial_grid } else { 0.0 };
         self.command = match self.kind {
-            DragKind::Move => edit::move_nodes(document, self.comp, &at, &self.nodes, to - self.from),
-            DragKind::Scale { node, handle, anchor, pivot, corner } => {
+            DragKind::Move => {
+                let mut delta = to - self.from;
+                if let Some(&primary) = self.nodes.last() {
+                    delta = edit::snapped_move(document, self.comp, &at, primary, delta, spacing);
+                }
+                edit::move_nodes(document, self.comp, &at, &self.nodes, delta)
+            }
+            DragKind::Scale { node, handle, anchor, pivot, corner, grab } => {
                 let anchor = if modifiers.alt { pivot } else { anchor };
                 let uniform = modifiers.shift && corner;
-                edit::scale_node(document, self.comp, &at, node, handle, anchor, to_local, uniform)
+                let target = edit::snap(to_local - grab, spacing);
+                edit::scale_node(document, self.comp, &at, node, handle, anchor, target, uniform)
             }
             DragKind::Rotate { node } => {
                 let snap = modifiers.shift.then_some(ROTATE_SNAP);
                 edit::rotate_node(document, self.comp, &at, node, from, to_local, snap)
             }
-            DragKind::SharedScale { handle, anchor, centre } => {
+            DragKind::SharedScale { handle, anchor, centre, grab } => {
                 let anchor = if modifiers.alt { centre } else { anchor };
-                let (span, reach) = (handle - anchor, to - anchor);
+                let target = edit::snap(to_local - grab, spacing) + self.origin;
+                let (span, reach) = (handle - anchor, target - anchor);
                 let factor =
                     if span.length_squared() > 1e-9 { reach.dot(span) / span.length_squared() } else { 1.0 };
                 let factor = if factor.abs() < 1e-3 { 1e-3f32.copysign(factor) } else { factor };
@@ -716,8 +743,7 @@ fn handles_for(
     let m = (view * state.world).matrix2;
     let per_unit = Vec2::new(m.x_axis.length(), m.y_axis.length()).max(Vec2::splat(1e-6));
     let pad = Vec2::splat(BOX_OUTSET * scale) / per_unit;
-    let local = Rect { min: local.min - pad, max: local.max + pad };
-    Some(Handles { local, world: state.world, pivot: state.props.transform.pivot, corners_only: false })
+    Some(Handles { local, pad, world: state.world, pivot: state.props.transform.pivot, corners_only: false })
 }
 
 /// Several nodes' shared handles: a stage-aligned box around them all,
@@ -731,9 +757,8 @@ fn shared_handles_for(
 ) -> Option<Handles> {
     let rect = nodes.iter().filter_map(|&n| picker.bounds(scene, n)).reduce(Rect::union)?;
     let pad = Vec2::splat(SHARED_OUTSET * scale / view.matrix2.x_axis.x);
-    let local = Rect { min: rect.min - pad, max: rect.max + pad };
-    let centre = (local.min + local.max) / 2.0;
-    Some(Handles { local, world: glam::Affine2::IDENTITY, pivot: centre, corners_only: true })
+    let centre = (rect.min + rect.max) / 2.0;
+    Some(Handles { local: rect, pad, world: glam::Affine2::IDENTITY, pivot: centre, corners_only: true })
 }
 
 /// What the stage shows: the drag's preview while a move is live, or the

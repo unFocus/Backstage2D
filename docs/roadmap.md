@@ -56,9 +56,10 @@ The design is recorded in [ADR 0004](adr/0004-commands-and-document-authority.md
 - [x] Open, Save, and Save As (project folders), with a prompt for unsaved changes. Saving marks the recovery log as saved rather than clearing it, so undo still works after a save.
 - [x] Offer to restore unsaved edits from a recovery directory after an editor crash. Undo history comes back too. Orphans with nothing unsaved are cleaned up.
 
-## Next
-
 ### M4: on-stage editing
+The stage became an editing surface: picking, marquee, moves, scale and
+rotate handles, and snapping, all drawn by the engine and committed as
+undoable commands that key animated properties (ADR 0005, ADR 0006).
 - On-stage selection and transforms, all drawn by the engine:
   - [x] Hit testing on the real paths (fills, and strokes with a few pixels of slop), click selection (outermost group, Ctrl for the deepest node, Shift toggles, locked nodes let clicks through), hover, and selection boxes. The stage applies a pick at once and reports `Picked` (protocol v7, ADR 0005).
   - [x] Test tooling: `backstage_uidriver` gives the headless UI smoke test real pointer and keyboard input (cage's virtual input) and screenshots. The smoke test clicks on the stage through GTK. The stage reports its `Framing` (protocol v8).
@@ -66,9 +67,11 @@ The design is recorded in [ADR 0004](adr/0004-commands-and-document-authority.md
   - Transform handles (scale, rotate), and real cursors instead of the stage's crosshair (protocol v9):
     - [x] One node: an oriented box, 8 scale handles (Shift keeps the aspect ratio, Alt scales about the pivot), rotate zones outside the corners (Shift snaps to 15°), and the pivot mark
     - [x] Several nodes: a shared box with corner handles (uniform scale about the opposite corner or, with Alt, the centre; rotate about the centre, Shift in 15° steps)
-  - [ ] Spatial grid snapping
+  - [x] Spatial grid snapping: moves put the primary node's pivot on the grid, and scale handles put the dragged corner on it. The grid shows while snapping is on. Set it in the Properties panel's document view, or toggle with Ctrl+'.
 - [x] Drag gestures become commands. Undo works across them. Dragging selected nodes previews live and commits one command on release. Animated properties get a key at the playhead, and others change their rest value (ADR 0006). The arrow keys nudge the selection the same way (1 px, or 10 with Shift). Escape cancels a drag.
 - [x] Render as soon as input arrives instead of on the fixed tick; idle while paused. Protocol v6 carries pointer presses, releases, and modifiers. The latency probe's median went from 16.6 ms to 0.9 ms (ADR 0002).
+
+## Next
 
 ### M5: Test Movie
 - [ ] Start `backstage_player` from the current document (Flash's Ctrl+Enter)
