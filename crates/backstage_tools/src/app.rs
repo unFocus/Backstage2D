@@ -345,6 +345,7 @@ impl SimpleComponent for App {
 
     fn init(stage_binary: PathBuf, root: Self::Root, sender: ComponentSender<Self>) -> ComponentParts<Self> {
         relm4::set_global_css(CSS);
+        crate::appearance::follow_system();
         let startup = std::env::var_os(PROJECT_ENV).map(PathBuf::from);
         let (copy, load_error) = match open_copy(startup.as_deref()) {
             Ok(copy) => (Some(copy), None),

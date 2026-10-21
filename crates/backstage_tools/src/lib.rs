@@ -5,6 +5,7 @@
 //! and `docs/adr/0002-stage-process-isolation.md`.
 
 pub mod app;
+pub mod appearance;
 pub mod health;
 pub mod layers;
 pub mod library;

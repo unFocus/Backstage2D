@@ -458,9 +458,11 @@ impl SimpleComponent for Timeline {
         area.set_hexpand(true);
         area.set_vexpand(true);
         let (drawn, last_width) = (model.drawn.clone(), model.width.clone());
-        area.set_draw_func(move |_, cr, width, height| {
+        area.set_draw_func(move |area, cr, width, height| {
             last_width.set(width as f64);
-            let _ = draw(cr, &drawn.borrow(), width as f64, height as f64);
+            let fg = area.color();
+            let pal = palette_for((fg.red() as f64, fg.green() as f64, fg.blue() as f64));
+            let _ = draw(cr, &drawn.borrow(), pal, width as f64, height as f64);
         });
         let drag = gtk::GestureDrag::new();
         let s = sender.clone();
@@ -596,10 +598,81 @@ fn list_strings(dropdown: &gtk::DropDown) -> Vec<String> {
     (0..list.n_items()).filter_map(|i| list.string(i)).map(|s| s.to_string()).collect()
 }
 
-fn draw(cr: &gtk::cairo::Context, drawn: &Drawn, width: f64, height: f64) -> Result<(), gtk::cairo::Error> {
+type Rgb = (f64, f64, f64);
+
+/// The timeline's colours for a light or a dark theme. The playhead and the
+/// selection look the same in both.
+#[derive(Debug, PartialEq)]
+pub struct Palette {
+    background: Rgb,
+    name_column: Rgb,
+    major_tick: Rgb,
+    minor_tick: Rgb,
+    label: Rgb,
+    end: Rgb,
+    separator: Rgb,
+    expander: Rgb,
+    name: Rgb,
+    dim_name: Rgb,
+    key_span: Rgb,
+    key: Rgb,
+    summary_key: Rgb,
+}
+
+impl Palette {
+    pub const DARK: Palette = Palette {
+        background: (0.16, 0.16, 0.18),
+        name_column: (0.19, 0.19, 0.21),
+        major_tick: (0.34, 0.34, 0.38),
+        minor_tick: (0.23, 0.23, 0.26),
+        label: (0.65, 0.65, 0.7),
+        end: (0.5, 0.5, 0.56),
+        separator: (0.28, 0.28, 0.31),
+        expander: (0.7, 0.7, 0.75),
+        name: (0.85, 0.85, 0.88),
+        dim_name: (0.5, 0.5, 0.54),
+        key_span: (0.35, 0.55, 0.85),
+        key: (0.9, 0.9, 0.95),
+        summary_key: (0.6, 0.6, 0.66),
+    };
+    pub const LIGHT: Palette = Palette {
+        background: (0.97, 0.97, 0.98),
+        name_column: (0.92, 0.92, 0.93),
+        major_tick: (0.7, 0.7, 0.74),
+        minor_tick: (0.87, 0.87, 0.89),
+        label: (0.35, 0.35, 0.4),
+        end: (0.5, 0.5, 0.56),
+        separator: (0.82, 0.82, 0.85),
+        expander: (0.35, 0.35, 0.4),
+        name: (0.12, 0.12, 0.14),
+        dim_name: (0.55, 0.55, 0.6),
+        key_span: (0.35, 0.55, 0.85),
+        key: (0.15, 0.15, 0.2),
+        summary_key: (0.5, 0.5, 0.56),
+    };
+}
+
+/// Picks the palette from the theme's text colour: light text means a dark
+/// theme.
+pub fn palette_for(fg: Rgb) -> &'static Palette {
+    let luminance = 0.2126 * fg.0 + 0.7152 * fg.1 + 0.0722 * fg.2;
+    if luminance > 0.5 { &Palette::DARK } else { &Palette::LIGHT }
+}
+
+fn rgb(cr: &gtk::cairo::Context, (r, g, b): Rgb) {
+    cr.set_source_rgb(r, g, b);
+}
+
+fn draw(
+    cr: &gtk::cairo::Context,
+    drawn: &Drawn,
+    pal: &Palette,
+    width: f64,
+    height: f64,
+) -> Result<(), gtk::cairo::Error> {
     let model = &drawn.model;
     let layout = Layout { width, duration: model.duration };
-    cr.set_source_rgb(0.16, 0.16, 0.18);
+    rgb(cr, pal.background);
     cr.paint()?;
     cr.set_font_size(11.0);
     cr.set_line_width(1.0);
@@ -608,15 +681,15 @@ fn draw(cr: &gtk::cairo::Context, drawn: &Drawn, width: f64, height: f64) -> Res
     for tick in layout.ticks(model.grid) {
         let x = tick.x.floor() + 0.5;
         if tick.major {
-            cr.set_source_rgb(0.34, 0.34, 0.38);
+            rgb(cr, pal.major_tick);
         } else {
-            cr.set_source_rgb(0.23, 0.23, 0.26);
+            rgb(cr, pal.minor_tick);
         }
         cr.move_to(x, if tick.major { RULER_H - 8.0 } else { RULER_H - 4.0 });
         cr.line_to(x, height);
         cr.stroke()?;
         if let Some(label) = &tick.label {
-            cr.set_source_rgb(0.65, 0.65, 0.7);
+            rgb(cr, pal.label);
             cr.move_to(x + 3.0, RULER_H - 9.0);
             cr.show_text(label)?;
         }
@@ -624,14 +697,14 @@ fn draw(cr: &gtk::cairo::Context, drawn: &Drawn, width: f64, height: f64) -> Res
     // End of the animation.
     if model.animation.is_some() {
         let x = layout.x_of(model.duration).floor() + 0.5;
-        cr.set_source_rgb(0.5, 0.5, 0.56);
+        rgb(cr, pal.end);
         cr.move_to(x, 0.0);
         cr.line_to(x, height);
         cr.stroke()?;
     }
 
     // Rows: name column, separators, and key marks.
-    cr.set_source_rgb(0.19, 0.19, 0.21);
+    rgb(cr, pal.name_column);
     cr.rectangle(0.0, 0.0, NAME_W, height);
     cr.fill()?;
     for (i, row) in model.rows.iter().enumerate() {
@@ -641,7 +714,7 @@ fn draw(cr: &gtk::cairo::Context, drawn: &Drawn, width: f64, height: f64) -> Res
             cr.rectangle(0.0, y, width, ROW_H);
             cr.fill()?;
         }
-        cr.set_source_rgb(0.28, 0.28, 0.31);
+        rgb(cr, pal.separator);
         cr.move_to(0.0, (y + ROW_H).floor() + 0.5);
         cr.line_to(width, (y + ROW_H).floor() + 0.5);
         cr.stroke()?;
@@ -649,7 +722,7 @@ fn draw(cr: &gtk::cairo::Context, drawn: &Drawn, width: f64, height: f64) -> Res
         if row.has_children {
             // ▸ collapsed, ▾ expanded.
             let (cx, cy) = (indent + EXPANDER_W / 2.0, y + ROW_H / 2.0);
-            cr.set_source_rgb(0.7, 0.7, 0.75);
+            rgb(cr, pal.expander);
             if row.expanded {
                 cr.move_to(cx - 4.0, cy - 2.0);
                 cr.line_to(cx + 4.0, cy - 2.0);
@@ -663,9 +736,9 @@ fn draw(cr: &gtk::cairo::Context, drawn: &Drawn, width: f64, height: f64) -> Res
             cr.fill()?;
         }
         if row.dim {
-            cr.set_source_rgb(0.5, 0.5, 0.54);
+            rgb(cr, pal.dim_name);
         } else {
-            cr.set_source_rgb(0.85, 0.85, 0.88);
+            rgb(cr, pal.name);
         }
         cr.move_to(indent + EXPANDER_W, y + ROW_H - 7.0);
         cr.show_text(&row.name)?;
@@ -673,14 +746,14 @@ fn draw(cr: &gtk::cairo::Context, drawn: &Drawn, width: f64, height: f64) -> Res
         let summary = row.has_children && !row.expanded;
 
         if let (Some(first), Some(last)) = (row.keys.first(), row.keys.last()) {
-            cr.set_source_rgba(0.35, 0.55, 0.85, 0.35);
+            cr.set_source_rgba(pal.key_span.0, pal.key_span.1, pal.key_span.2, 0.35);
             cr.rectangle(layout.x_of(*first), y + 4.0, layout.x_of(*last) - layout.x_of(*first), ROW_H - 8.0);
             cr.fill()?;
         }
         if summary {
-            cr.set_source_rgb(0.6, 0.6, 0.66);
+            rgb(cr, pal.summary_key);
         } else {
-            cr.set_source_rgb(0.9, 0.9, 0.95);
+            rgb(cr, pal.key);
         }
         for &key in &row.keys {
             let (x, cy, r) = (layout.x_of(key), y + ROW_H / 2.0, 4.0);
@@ -692,7 +765,7 @@ fn draw(cr: &gtk::cairo::Context, drawn: &Drawn, width: f64, height: f64) -> Res
             cr.fill()?;
         }
     }
-    cr.set_source_rgb(0.28, 0.28, 0.31);
+    rgb(cr, pal.separator);
     cr.move_to(0.0, RULER_H - 0.5);
     cr.line_to(width, RULER_H - 0.5);
     cr.stroke()?;
@@ -954,5 +1027,11 @@ mod tests {
         playhead.seek(squash.duration);
         playhead.play(Some(squash), t0);
         assert_eq!(playhead.clock(t0), Time::ZERO);
+    }
+
+    #[test]
+    fn the_palette_follows_the_text_colour() {
+        assert_eq!(palette_for((0.95, 0.95, 0.95)), &Palette::DARK, "light text: dark theme");
+        assert_eq!(palette_for((0.1, 0.1, 0.12)), &Palette::LIGHT, "dark text: light theme");
     }
 }

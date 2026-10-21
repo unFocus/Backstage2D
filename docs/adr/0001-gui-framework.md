@@ -92,6 +92,13 @@ GNOME) first, then macOS and Windows 11. The criteria are now:
 - **API level:** we build with gtk4-rs's `v4_14` feature. That limits us to
   GTK 4.14 APIs, so the binary runs on the system GTK (4.22 on the dev host)
   even when it's built against newer headers.
+- **Light and dark:** without libadwaita, GTK goes dark only through
+  `gtk-application-prefer-dark-theme` or a dark theme name. KDE sets those
+  for GTK apps, but GNOME only publishes `color-scheme` through the settings
+  portal. So the editor reads the portal itself at startup, follows its
+  `SettingChanged` signal, and sets the GTK setting (`appearance.rs`;
+  added 2026-10-21). Panels drawn with cairo pick a light or dark palette
+  from the widget's text colour (`timeline::palette_for`).
 
 ### Alternatives not chosen
 - **GPUI:** Apache-2.0, polished, and strong on macOS/Windows. But its API
